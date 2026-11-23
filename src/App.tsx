@@ -20,7 +20,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { NavSection, TransactionRecord, TransactionType } from './types/finance';
 
 function FinTrackWorkspace() {
-  const { user, authReady } = useFinance();
+  const { user, authReady, isGuest } = useFinance();
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [txInitialType, setTxInitialType] = useState<TransactionType>('expense');
@@ -40,7 +40,7 @@ function FinTrackWorkspace() {
     );
   }
 
-  if (!user || !user.emailVerified) {
+  if (!user || (!isGuest && !user.emailVerified)) {
     return <AuthView />;
   }
 

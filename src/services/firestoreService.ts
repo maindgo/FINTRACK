@@ -25,6 +25,33 @@ import {
 } from '../types/finance';
 import { FIELD_LIMITS } from '../utils/constants';
 import { addFrequencyToDate, getTodayStr } from '../utils/formatters';
+import {
+  clearGuestStoreData,
+  GUEST_UID,
+  guestAddSavingsDeposit,
+  guestCreateBillRecord,
+  guestCreateBudget,
+  guestCreateDebtRecord,
+  guestCreateRecurringTransaction,
+  guestCreateSavingsGoal,
+  guestCreateTransaction,
+  guestDeleteBillRecord,
+  guestDeleteBudget,
+  guestDeleteDebtRecord,
+  guestDeleteRecurringTransaction,
+  guestDeleteSavingsGoal,
+  guestDeleteTransaction,
+  guestPayBillRecord,
+  guestRecordDebtPayment,
+  guestRunRecurringTransactionNow,
+  guestToggleRecurringActive,
+  guestUpdateBillRecord,
+  guestUpdateBudget,
+  guestUpdateDebtRecord,
+  guestUpdateProfile,
+  guestUpdateSavingsGoal,
+  guestUpdateTransaction,
+} from './guestStore';
 
 function generateDocId(): string {
   return doc(collection(db, '_ids')).id;
@@ -76,6 +103,10 @@ export async function updateUserProfile(
   uid: string,
   updates: Partial<Pick<UserProfile, 'displayName' | 'currency' | 'theme' | 'monthlyBudgetLimit'>>
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateProfile(updates);
+    return;
+  }
   const path = `users/${uid}`;
   try {
     const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -102,6 +133,9 @@ export async function updateUserProfile(
 export type TransactionInput = Omit<TransactionRecord, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
 
 export async function createTransaction(uid: string, input: TransactionInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateTransaction(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/transactions/${id}`;
   try {
@@ -133,6 +167,10 @@ export async function updateTransaction(
   id: string,
   input: Omit<TransactionInput, 'recurringId'>
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateTransaction(id, input);
+    return;
+  }
   const path = `users/${uid}/transactions/${id}`;
   try {
     await updateDoc(doc(db, 'users', uid, 'transactions', id), {
@@ -155,6 +193,10 @@ export async function updateTransaction(
 }
 
 export async function deleteTransaction(uid: string, id: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteTransaction(id);
+    return;
+  }
   const path = `users/${uid}/transactions/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'transactions', id));
@@ -167,6 +209,9 @@ export async function deleteTransaction(uid: string, id: string): Promise<void> 
 export type SavingsGoalInput = Omit<SavingsGoal, 'id' | 'userId' | 'status' | 'createdAt' | 'updatedAt'>;
 
 export async function createSavingsGoal(uid: string, input: SavingsGoalInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateSavingsGoal(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/savingsGoals/${id}`;
   const targetAmount = clampAmount(input.targetAmount);
@@ -197,6 +242,10 @@ export async function updateSavingsGoal(
   input: Pick<SavingsGoal, 'name' | 'targetAmount' | 'targetDate' | 'category' | 'notes'>,
   currentSavedAmount: number
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateSavingsGoal(id, input, currentSavedAmount);
+    return;
+  }
   const path = `users/${uid}/savingsGoals/${id}`;
   const targetAmount = clampAmount(input.targetAmount);
   const status = currentSavedAmount >= targetAmount ? 'completed' : 'active';
@@ -222,6 +271,10 @@ export async function addSavingsDeposit(
   date: string,
   note: string
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestAddSavingsDeposit(goal, depositAmount, date, note);
+    return;
+  }
   const contributionId = generateDocId();
   const path = `users/${uid}/savingsGoals/${goal.id}`;
   const cleanDeposit = clampAmount(depositAmount);
@@ -253,6 +306,10 @@ export async function addSavingsDeposit(
 }
 
 export async function deleteSavingsGoal(uid: string, goalId: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteSavingsGoal(goalId);
+    return;
+  }
   const path = `users/${uid}/savingsGoals/${goalId}`;
   try {
     const contribSnap = await getDocs(
@@ -274,6 +331,9 @@ export async function deleteSavingsGoal(uid: string, goalId: string): Promise<vo
 export type BudgetInput = Omit<BudgetRecord, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
 
 export async function createBudget(uid: string, input: BudgetInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateBudget(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/budgets/${id}`;
   try {
@@ -294,6 +354,10 @@ export async function createBudget(uid: string, input: BudgetInput): Promise<str
 }
 
 export async function updateBudget(uid: string, id: string, input: BudgetInput): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateBudget(id, input);
+    return;
+  }
   const path = `users/${uid}/budgets/${id}`;
   try {
     await updateDoc(doc(db, 'users', uid, 'budgets', id), {
@@ -310,6 +374,10 @@ export async function updateBudget(uid: string, id: string, input: BudgetInput):
 }
 
 export async function deleteBudget(uid: string, id: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteBudget(id);
+    return;
+  }
   const path = `users/${uid}/budgets/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'budgets', id));
@@ -322,6 +390,9 @@ export async function deleteBudget(uid: string, id: string): Promise<void> {
 export type DebtInput = Omit<DebtRecord, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
 
 export async function createDebtRecord(uid: string, input: DebtInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateDebtRecord(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/debtRecords/${id}`;
   const totalAmount = clampAmount(input.totalAmount);
@@ -361,6 +432,10 @@ export async function updateDebtRecord(
   id: string,
   input: Omit<DebtInput, 'paidAmount'>
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateDebtRecord(id, input);
+    return;
+  }
   const path = `users/${uid}/debtRecords/${id}`;
   try {
     await updateDoc(doc(db, 'users', uid, 'debtRecords', id), {
@@ -387,6 +462,10 @@ export async function recordDebtPayment(
   method: string,
   note: string
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestRecordDebtPayment(record, paymentAmount, date, method, note);
+    return;
+  }
   const paymentId = generateDocId();
   const path = `users/${uid}/debtRecords/${record.id}`;
   const remaining = Math.max(0, Number((record.totalAmount - record.paidAmount).toFixed(2)));
@@ -425,6 +504,10 @@ export async function recordDebtPayment(
 }
 
 export async function deleteDebtRecord(uid: string, id: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteDebtRecord(id);
+    return;
+  }
   const path = `users/${uid}/debtRecords/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'debtRecords', id));
@@ -437,6 +520,9 @@ export async function deleteDebtRecord(uid: string, id: string): Promise<void> {
 export type BillInput = Omit<BillRecord, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
 
 export async function createBillRecord(uid: string, input: BillInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateBillRecord(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/bills/${id}`;
   const amount = clampAmount(input.amount);
@@ -469,6 +555,10 @@ export async function updateBillRecord(
   id: string,
   input: Omit<BillInput, 'paidAmount'>
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestUpdateBillRecord(id, input);
+    return;
+  }
   const path = `users/${uid}/bills/${id}`;
   try {
     await updateDoc(doc(db, 'users', uid, 'bills', id), {
@@ -498,6 +588,10 @@ export async function payBillRecord(
   note: string,
   alsoLogExpense: boolean
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestPayBillRecord(bill, payAmount, date, method, note, alsoLogExpense);
+    return;
+  }
   const paymentId = generateDocId();
   const path = `users/${uid}/bills/${bill.id}`;
   const remaining = Math.max(0, Number((bill.amount - bill.paidAmount).toFixed(2)));
@@ -577,6 +671,10 @@ export async function payBillRecord(
 }
 
 export async function deleteBillRecord(uid: string, id: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteBillRecord(id);
+    return;
+  }
   const path = `users/${uid}/bills/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'bills', id));
@@ -589,6 +687,9 @@ export async function deleteBillRecord(uid: string, id: string): Promise<void> {
 export type RecurringInput = Omit<RecurringTransaction, 'id' | 'userId' | 'lastRunDate' | 'createdAt' | 'updatedAt'>;
 
 export async function createRecurringTransaction(uid: string, input: RecurringInput): Promise<string> {
+  if (uid === GUEST_UID) {
+    return guestCreateRecurringTransaction(input);
+  }
   const id = generateDocId();
   const path = `users/${uid}/recurringTransactions/${id}`;
   try {
@@ -615,6 +716,10 @@ export async function createRecurringTransaction(uid: string, input: RecurringIn
 }
 
 export async function toggleRecurringActive(uid: string, id: string, isActive: boolean): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestToggleRecurringActive(id, isActive);
+    return;
+  }
   const path = `users/${uid}/recurringTransactions/${id}`;
   try {
     await updateDoc(doc(db, 'users', uid, 'recurringTransactions', id), {
@@ -630,6 +735,10 @@ export async function runRecurringTransactionNow(
   uid: string,
   rule: RecurringTransaction
 ): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestRunRecurringTransactionNow(rule);
+    return;
+  }
   const txId = generateDocId();
   const path = `users/${uid}/recurringTransactions/${rule.id}`;
   const runDate = rule.nextRunDate <= getTodayStr() ? rule.nextRunDate : getTodayStr();
@@ -665,6 +774,10 @@ export async function runRecurringTransactionNow(
 }
 
 export async function deleteRecurringTransaction(uid: string, id: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    guestDeleteRecurringTransaction(id);
+    return;
+  }
   const path = `users/${uid}/recurringTransactions/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'recurringTransactions', id));
@@ -675,6 +788,10 @@ export async function deleteRecurringTransaction(uid: string, id: string): Promi
 
 // --- Full Account Data Wipe (for Account Deletion) ---
 export async function wipeAllUserFirestoreData(uid: string): Promise<void> {
+  if (uid === GUEST_UID) {
+    clearGuestStoreData();
+    return;
+  }
   const subcollections = [
     'transactions',
     'budgets',

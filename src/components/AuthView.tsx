@@ -26,7 +26,7 @@ import { useFinance } from '../context/FinanceContext';
 type AuthMode = 'login' | 'register' | 'forgot';
 
 export function AuthView() {
-  const { user, refreshAuthUser } = useFinance();
+  const { firebaseUser, refreshAuthUser, enterGuestMode } = useFinance();
   const [mode, setMode] = useState<AuthMode>('login');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -104,11 +104,11 @@ export function AuthView() {
   };
 
   const handleResendVerification = async () => {
-    if (!user) return;
+    if (!firebaseUser) return;
     setLoading(true);
     setErrorMsg('');
     try {
-      await sendEmailVerification(user);
+      await sendEmailVerification(firebaseUser);
       setInfoMsg('Verification email resent. Check your inbox, then click "I Verified My Email".');
     } catch (err: unknown) {
       setErrorMsg((err as Error)?.message || 'Could not resend verification email.');
@@ -118,7 +118,7 @@ export function AuthView() {
   };
 
   // Verification gate for unverified Email/Password users
-  if (user && !user.emailVerified) {
+  if (firebaseUser && !firebaseUser.emailVerified) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
         <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-8 space-y-6">
@@ -131,7 +131,7 @@ export function AuthView() {
             </h1>
             <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
               To protect your private financial ledger, FinTrack requires email verification before accessing cloud storage. We sent a link to{' '}
-              <span className="font-medium text-slate-900 dark:text-slate-200">{user.email}</span>.
+              <span className="font-medium text-slate-900 dark:text-slate-200">{firebaseUser.email}</span>.
             </p>
           </div>
 
@@ -283,6 +283,22 @@ export function AuthView() {
             </svg>
             Continue with Google
           </button>
+
+          {/* Guest Mode Entry */}
+          <div className="space-y-1.5">
+            <button
+              type="button"
+              onClick={enterGuestMode}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-sm font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors disabled:opacity-50"
+            >
+              <UserIcon className="w-4 h-4 shrink-0" />
+              Continue as Guest
+            </button>
+            <p className="text-[11px] text-center text-slate-500 dark:text-slate-400">
+              Try FinTrack immediately. Guest data is saved locally in your browser.
+            </p>
+          </div>
 
           <div className="relative flex items-center">
             <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />

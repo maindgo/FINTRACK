@@ -12,9 +12,10 @@ import {
   deleteSavingsGoal,
   updateSavingsGoal,
 } from '../services/firestoreService';
+import { getGuestSavingsContributions, GUEST_EVENT } from '../services/guestStore';
 
 export function SavingsPage() {
-  const { user, savingsGoals, currency } = useFinance();
+  const { user, isGuest, savingsGoals, currency } = useFinance();
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null);
   const [depositGoal, setDepositGoal] = useState<SavingsGoal | null>(null);
@@ -40,6 +41,16 @@ export function SavingsPage() {
       setContributions([]);
       return;
     }
+
+    if (isGuest) {
+      const syncGuestContributions = () => {
+        setContributions(getGuestSavingsContributions(historyGoal.id));
+      };
+      syncGuestContributions();
+      window.addEventListener(GUEST_EVENT, syncGuestContributions);
+      return () => window.removeEventListener(GUEST_EVENT, syncGuestContributions);
+    }
+
     const unsub = onSnapshot(
       query(
         collection(db, 'users', user.uid, 'savingsGoals', historyGoal.id, 'contributions'),
@@ -58,7 +69,7 @@ export function SavingsPage() {
         )
     );
     return () => unsub();
-  }, [user, historyGoal]);
+  }, [user, isGuest, historyGoal]);
 
   const totals = useMemo(() => {
     const target = savingsGoals.reduce((s, g) => s + g.targetAmount, 0);

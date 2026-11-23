@@ -5,11 +5,13 @@ import {
   ArrowUpRight,
   BarChart3,
   CalendarClock,
+  CloudUpload,
   CreditCard,
   HandCoins,
   LayoutDashboard,
   Lightbulb,
   ListOrdered,
+  LogIn,
   LogOut,
   Menu,
   Moon,
@@ -55,8 +57,33 @@ export function LayoutShell({
   onQuickAddTransaction,
   children,
 }: LayoutShellProps) {
-  const { user, profile, currency, theme, toggleTheme } = useFinance();
+  const {
+    user,
+    isGuest,
+    profile,
+    currency,
+    theme,
+    toggleTheme,
+    exitGuestMode,
+    pendingGuestMigrationCount,
+    migrateGuestToCloud,
+    dismissGuestMigration,
+  } = useFinance();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationError, setMigrationError] = useState('');
+
+  const handleMigrateToCloud = async () => {
+    setMigrating(true);
+    setMigrationError('');
+    try {
+      await migrateGuestToCloud();
+    } catch (err: unknown) {
+      setMigrationError((err as Error)?.message || 'Failed to import guest records.');
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const activeLabel = NAV_ITEMS.find((n) => n.id === activeSection)?.label || 'Dashboard';
 
@@ -123,18 +150,29 @@ export function LayoutShell({
               {profile?.displayName || user?.displayName || 'FinTrack User'}
             </div>
             <div className="text-[11px] text-slate-400 truncate">
-              {user?.email}
+              {isGuest ? 'Guest Mode · Local Storage' : user?.email}
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => signOut(auth)}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          Sign Out
-        </button>
+        {isGuest ? (
+          <button
+            type="button"
+            onClick={exitGuestMode}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors whitespace-nowrap"
+          >
+            <LogIn className="w-3.5 h-3.5 shrink-0" />
+            Sign In / Sync to Cloud
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => signOut(auth)}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors whitespace-nowrap"
+          >
+            <LogOut className="w-3.5 h-3.5 shrink-0" />
+            Sign Out
+          </button>
+        )}
       </div>
     </div>
   );
@@ -206,7 +244,59 @@ export function LayoutShell({
         </header>
 
         {/* Page Viewport */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto space-y-5">
+          {isGuest && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="text-xs text-slate-600 dark:text-slate-300">
+                <span className="font-semibold text-slate-900 dark:text-white">Guest Mode active:</span>{' '}
+                All records are saved locally in this browser. Sign in anytime to sync across devices.
+              </div>
+              <button
+                type="button"
+                onClick={exitGuestMode}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap self-start sm:self-auto shrink-0"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Sign In to Sync
+              </button>
+            </div>
+          )}
+
+          {!isGuest && pendingGuestMigrationCount > 0 && (
+            <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-semibold text-emerald-900 dark:text-emerald-200">
+                  Found {pendingGuestMigrationCount} local Guest Mode record{pendingGuestMigrationCount === 1 ? '' : 's'}
+                </div>
+                <div className="text-xs text-emerald-700 dark:text-emerald-300">
+                  Import your browser-saved entries into your private cloud ledger, or discard them.
+                </div>
+                {migrationError && (
+                  <div className="text-xs text-red-600 dark:text-red-400">{migrationError}</div>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={migrating}
+                  onClick={handleMigrateToCloud}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <CloudUpload className="w-3.5 h-3.5" />
+                  {migrating ? 'Importing...' : 'Import to Cloud'}
+                </button>
+                <button
+                  type="button"
+                  disabled={migrating}
+                  onClick={dismissGuestMigration}
+                  className="px-3 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 text-xs font-medium text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 whitespace-nowrap"
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
+
           {children}
         </main>
       </div>

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { deleteUser, signOut } from 'firebase/auth';
 import {
   AlertTriangle,
   Check,
   Database,
   Download,
+  LogIn,
   Moon,
   Sun,
   Trash2,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { useFinance } from '../context/FinanceContext';
+import { GUEST_UID } from '../services/guestStore';
 import { CurrencyCode } from '../types/finance';
 import { CURRENCIES, FIELD_LIMITS } from '../utils/constants';
 import {
@@ -31,6 +33,9 @@ import {
 export function SettingsPage() {
   const {
     user,
+    firebaseUser,
+    isGuest,
+    exitGuestMode,
     profile,
     currency,
     theme,
@@ -56,6 +61,13 @@ export function SettingsPage() {
   const [deleteText, setDeleteText] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+
+  useEffect(() => {
+    if (profile) {
+      setDisplayName(profile.displayName || user?.displayName || '');
+      setMonthlyLimit(String(profile.monthlyBudgetLimit || 0));
+    }
+  }, [profile, user?.displayName]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,8 +175,16 @@ export function SettingsPage() {
     setDeleting(true);
     setDeleteError('');
     try {
-      await wipeAllUserFirestoreData(user.uid);
-      await deleteUser(user);
+      if (isGuest) {
+        await wipeAllUserFirestoreData(GUEST_UID);
+        setShowDeleteConfirm(false);
+        setDeleteText('');
+        setDeleting(false);
+        return;
+      }
+      if (!firebaseUser) return;
+      await wipeAllUserFirestoreData(firebaseUser.uid);
+      await deleteUser(firebaseUser);
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code || '';
       if (code === 'auth/requires-recent-login') {
@@ -219,7 +239,7 @@ export function SettingsPage() {
             <input
               type="text"
               disabled
-              value={user?.email || ''}
+              value={isGuest ? 'Guest Mode (Local Browser Storage)' : user?.email || ''}
               className="w-full px-3 py-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500"
             />
           </div>
@@ -342,38 +362,54 @@ export function SettingsPage() {
         )}
       </div>
 
-      {/* Danger Zone: Account Deletion */}
+      {/* Danger Zone: Account / Guest Data Control */}
       <div className="bg-white dark:bg-slate-900 border border-red-200 dark:border-red-900/60 rounded-xl p-6 space-y-4">
         <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
           <AlertTriangle className="w-4 h-4" />
-          <h3 className="text-sm font-semibold">Account Deletion</h3>
+          <h3 className="text-sm font-semibold">
+            {isGuest ? 'Guest Data & Cloud Sync' : 'Account Deletion'}
+          </h3>
         </div>
         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-          Permanently delete your FinTrack account along with all stored transactions, savings goals, budgets, loans, bills, and recurring schedules. This action cannot be undone.
+          {isGuest
+            ? 'Your Guest Mode records are stored locally in this browser. Sign in to sync them to a private cloud account, or erase all local guest data and exit Guest Mode.'
+            : 'Permanently delete your FinTrack account along with all stored transactions, savings goals, budgets, loans, bills, and recurring schedules. This action cannot be undone.'}
         </p>
 
         {!showDeleteConfirm ? (
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={() => setShowDeleteConfirm(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 whitespace-nowrap"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Delete My Account
+              {isGuest ? 'Erase Local Guest Data' : 'Delete My Account'}
             </button>
-            <button
-              type="button"
-              onClick={() => signOut(auth)}
-              className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium"
-            >
-              Sign Out
-            </button>
+            {isGuest ? (
+              <button
+                type="button"
+                onClick={exitGuestMode}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 whitespace-nowrap"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Sign In &amp; Sync to Cloud
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => signOut(auth)}
+                className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium whitespace-nowrap"
+              >
+                Sign Out
+              </button>
+            )}
           </div>
         ) : (
           <div className="p-4 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 space-y-3">
             <p className="text-xs font-medium text-red-800 dark:text-red-300">
-              Type <span className="font-mono font-bold">DELETE</span> to permanently erase all your data and account:
+              Type <span className="font-mono font-bold">DELETE</span> to permanently erase{' '}
+              {isGuest ? 'all local guest records' : 'all your data and account'}:
             </p>
             <input
               type="text"
@@ -390,7 +426,7 @@ export function SettingsPage() {
                 onClick={handleDeleteAccount}
                 className="px-4 py-2 rounded-lg bg-red-600 text-white text-xs font-semibold disabled:opacity-40"
               >
-                {deleting ? 'Deleting...' : 'Confirm Permanent Deletion'}
+                {deleting ? 'Deleting...' : isGuest ? 'Confirm Local Erasure' : 'Confirm Permanent Deletion'}
               </button>
               <button
                 type="button"

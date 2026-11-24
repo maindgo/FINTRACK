@@ -10,10 +10,11 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { ArrowDownRight, ArrowUpRight, TrendingDown, TrendingUp } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Download, FileSpreadsheet, TrendingDown, TrendingUp } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { formatCurrency } from '../utils/formatters';
 import { aggregateByCategory, buildMonthlySeries, computeProfitLoss } from '../utils/analytics';
+import { exportProfitLossToExcel, exportProfitLossToPDF } from '../utils/exporters';
 
 export function ProfitLossPage() {
   const { transactions, currency } = useFinance();
@@ -39,13 +40,34 @@ export function ProfitLossPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Profit &amp; Loss Calculator
-        </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Net Profit = Total Income − Total Expenses across daily, monthly, and yearly horizons.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Profit &amp; Loss Calculator
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Net Profit = Total Income − Total Expenses across daily, monthly, and yearly horizons.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => exportProfitLossToExcel(transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            P&amp;L Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => exportProfitLossToPDF(transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            P&amp;L PDF
+          </button>
+        </div>
       </div>
 
       {/* Period P&L Cards */}

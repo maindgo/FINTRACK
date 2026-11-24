@@ -105,3 +105,16 @@ export const FIELD_LIMITS = {
   RECEIPT_DATA_MAX: 250000,
   AMOUNT_MAX: 1000000000,
 };
+
+export const ADMIN_EMAIL = 'maind.go2000@gmail.com';
+export const SUPPORT_EMAIL = 'support.maindgo@gmail.com';
+
+export const MAINTENANCE_UPDATE_ITEMS = [
+  'AI Accountant soon',
+  'Budget Forecasting',
+  'Including AI',
+  'Fix Bugs',
+] as const;
+
+export const MAINTENANCE_BANNER_TEXT =
+  'growth yourself with FinTrack If you have any problem or Suggestions to add-on in FinTrack please Contact us on support.maindgo@gmail.com freely we appreciate your thoughts Thanks for Using on FinTrack';

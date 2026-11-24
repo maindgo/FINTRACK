@@ -15,7 +15,7 @@ import {
 import { getGuestSavingsContributions, GUEST_EVENT } from '../services/guestStore';
 
 export function SavingsPage() {
-  const { user, isGuest, savingsGoals, currency } = useFinance();
+  const { user, isGuest, savingsGoals, transactions, currency } = useFinance();
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null);
   const [depositGoal, setDepositGoal] = useState<SavingsGoal | null>(null);
@@ -76,8 +76,16 @@ export function SavingsPage() {
     const saved = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
     const remaining = Math.max(0, target - saved);
     const completed = savingsGoals.filter((g) => g.status === 'completed').length;
-    return { target, saved, remaining, completed };
-  }, [savingsGoals]);
+    const allIncome = transactions
+      .filter((t) => t.type === 'income')
+      .reduce((s, t) => s + t.amount, 0);
+    const allExpenses = transactions
+      .filter((t) => t.type === 'expense')
+      .reduce((s, t) => s + t.amount, 0);
+    const cashReserve = Math.max(0, allIncome - allExpenses);
+    const totalSavingRightNow = cashReserve + saved;
+    return { target, saved, remaining, completed, cashReserve, totalSavingRightNow };
+  }, [savingsGoals, transactions]);
 
   const openCreateModal = () => {
     setEditingGoal(null);
@@ -173,9 +181,20 @@ export function SavingsPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="col-span-2 lg:col-span-1 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4">
+          <div className="text-xs font-medium text-emerald-800 dark:text-emerald-300">
+            Total Saving Right Now
+          </div>
+          <div className="text-xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-300 mt-1">
+            {formatCurrency(totals.totalSavingRightNow, currency)}
+          </div>
+          <div className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 mt-0.5">
+            Cash {formatCurrency(totals.cashReserve, currency)} + Goals {formatCurrency(totals.saved, currency)}
+          </div>
+        </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-          <div className="text-xs text-slate-500 dark:text-slate-400">Total Saved</div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">Saved in Goals</div>
           <div className="text-xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
             {formatCurrency(totals.saved, currency)}
           </div>

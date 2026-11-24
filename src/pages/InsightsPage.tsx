@@ -2,6 +2,8 @@ import React, { useMemo } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
+  FileSpreadsheet,
   Info,
   Lightbulb,
   TrendingDown,
@@ -10,6 +12,8 @@ import {
 import { useFinance } from '../context/FinanceContext';
 import { formatCurrency, formatReadableDate } from '../utils/formatters';
 import { computeSmartInsights } from '../utils/analytics';
+import { buildFinancialStatsSnapshot } from '../utils/erpAnalytics';
+import { exportFinancialStatsToExcel, exportFinancialStatsToPDF } from '../utils/exporters';
 
 export function InsightsPage() {
   const {
@@ -18,6 +22,8 @@ export function InsightsPage() {
     bills,
     debtRecords,
     savingsGoals,
+    recordPayments,
+    recurringTransactions,
     profile,
     currency,
   } = useFinance();
@@ -36,15 +42,53 @@ export function InsightsPage() {
     [transactions, budgets, bills, debtRecords, savingsGoals, profile, currency]
   );
 
+  const statsSnapshot = useMemo(
+    () =>
+      buildFinancialStatsSnapshot({
+        periodLabel: 'All-Time & Current Positions',
+        periodStart: '0000-01-01',
+        periodEnd: '9999-12-31',
+        allTransactions: transactions,
+        savingsGoals,
+        budgets,
+        debtRecords,
+        bills,
+        recordPayments,
+        recurringTransactions,
+      }),
+    [transactions, savingsGoals, budgets, debtRecords, bills, recordPayments, recurringTransactions]
+  );
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          Smart Financial Insights
-        </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Automated analysis computed directly from your recorded transactions, budgets, and obligations.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Smart Financial Insights
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Automated analysis computed directly from your recorded transactions, budgets, and obligations.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => exportFinancialStatsToExcel(statsSnapshot, transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            Stats Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => exportFinancialStatsToPDF(statsSnapshot, transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Stats PDF
+          </button>
+        </div>
       </div>
 
       {/* Key Analytical Metrics */}

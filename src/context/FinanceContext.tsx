@@ -4,9 +4,12 @@ import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
   BillRecord,
+  BrowserNotificationPermission,
   BudgetRecord,
   CurrencyCode,
   DebtRecord,
+  FinTrackNotification,
+  NotificationPrefs,
   RecordPayment,
   RecurringTransaction,
   SavingsGoal,
@@ -17,6 +20,8 @@ import {
 import {
   ensureUserProfile,
   runRecurringTransactionNow,
+  setMaintenanceMode,
+  subscribeToMaintenanceConfig,
   updateUserProfile,
 } from '../services/firestoreService';
 import {
@@ -29,7 +34,19 @@ import {
   migrateGuestStoreToFirestore,
   setGuestSessionActive,
 } from '../services/guestStore';
+import {
+  DEFAULT_NOTIFICATION_PREFS,
+  dispatchNewNotificationsToDeviceBar,
+  getBrowserNotificationPermission,
+  loadNotificationPrefs,
+  registerNotificationServiceWorker,
+  requestMobileNotificationPermission,
+  saveNotificationPrefs,
+  sendTestSystemNotification,
+} from '../services/notificationService';
+import { ADMIN_EMAIL } from '../utils/constants';
 import { getTodayStr } from '../utils/formatters';
+import { computeFinTrackNotifications } from '../utils/notifications';
 
 interface FinanceContextValue {
   user: User | null;
@@ -48,6 +65,10 @@ interface FinanceContextValue {
   bills: BillRecord[];
   recurringTransactions: RecurringTransaction[];
   pendingGuestMigrationCount: number;
+  notificationPrefs: NotificationPrefs;
+  notifications: FinTrackNotification[];
+  unreadNotificationCount: number;
+  notificationPermission: BrowserNotificationPermission;
   toggleTheme: () => Promise<void>;
   setCurrency: (code: CurrencyCode) => Promise<void>;
   refreshAuthUser: () => Promise<void>;
@@ -55,6 +76,18 @@ interface FinanceContextValue {
   exitGuestMode: () => void;
   migrateGuestToCloud: () => Promise<number>;
   dismissGuestMigration: () => void;
+  enableMobileNotifications: () => Promise<BrowserNotificationPermission>;
+  updateNotificationPrefs: (updater: (prev: NotificationPrefs) => NotificationPrefs) => void;
+  markNotificationRead: (signature: string) => void;
+  markAllNotificationsRead: () => void;
+  dismissNotification: (signature: string) => void;
+  restoreDismissedNotifications: () => void;
+  sendTestNotification: () => Promise<{ ok: boolean; message: string }>;
+  isAdmin: boolean;
+  maintenanceEnabled: boolean;
+  maintenanceLoading: boolean;
+  maintenanceUpdating: boolean;
+  setMaintenanceEnabledMode: (enabled: boolean) => Promise<void>;
 }
 
 const FinanceContext = createContext<FinanceContextValue | undefined>(undefined);
@@ -88,11 +121,24 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const [recordPayments, setRecordPayments] = useState<RecordPayment[]>([]);
   const [bills, setBills] = useState<BillRecord[]>([]);
   const [recurringTransactions, setRecurringTransactions] = useState<RecurringTransaction[]>([]);
+  const [notificationPrefs, setNotificationPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
+  const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() =>
+    getBrowserNotificationPermission()
+  );
+
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
+  const [maintenanceUpdating, setMaintenanceUpdating] = useState(false);
 
   const profileInitAttempted = useRef<string | null>(null);
   const recurringProcessedSession = useRef<Set<string>>(new Set());
 
   const isGuest = guestActive && !firebaseUser;
+  const isAdmin = Boolean(
+    firebaseUser &&
+      firebaseUser.emailVerified &&
+      firebaseUser.email?.toLowerCase() === ADMIN_EMAIL
+  );
 
   const user: User | null = firebaseUser
     ? firebaseUser
@@ -115,6 +161,20 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     }
     window.localStorage.setItem('fintrack-theme', theme);
   }, [theme]);
+
+  // Listen to global app maintenance status (non-PII config document)
+  useEffect(() => {
+    const unsub = subscribeToMaintenanceConfig(
+      (cfg) => {
+        setMaintenanceEnabled(cfg.enabled);
+        setMaintenanceLoading(false);
+      },
+      () => {
+        setMaintenanceLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -253,10 +313,20 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
           }
         } else if (profileInitAttempted.current !== uid) {
           profileInitAttempted.current = uid;
+          const pendingName =
+            typeof window !== 'undefined'
+              ? window.localStorage.getItem('fintrack-pending-displayname') || ''
+              : '';
+          if (pendingName && typeof window !== 'undefined') {
+            window.localStorage.removeItem('fintrack-pending-displayname');
+          }
           await ensureUserProfile(
             uid,
             firebaseUser.email || 'user@fintrack.app',
-            firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'FinTrack User'
+            firebaseUser.displayName ||
+              pendingName ||
+              firebaseUser.email?.split('@')[0] ||
+              'FinTrack User'
           );
         }
         setDataLoading(false);
@@ -394,6 +464,179 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
 
   const currency: CurrencyCode = profile?.currency || 'INR';
 
+  // Register notification service worker & sync permission state on focus
+  useEffect(() => {
+    registerNotificationServiceWorker();
+    const syncPermission = () => setNotificationPermission(getBrowserNotificationPermission());
+    syncPermission();
+    window.addEventListener('focus', syncPermission);
+    document.addEventListener('visibilitychange', syncPermission);
+    return () => {
+      window.removeEventListener('focus', syncPermission);
+      document.removeEventListener('visibilitychange', syncPermission);
+    };
+  }, []);
+
+  // Load device notification preferences for the active user
+  useEffect(() => {
+    if (!activeUid) {
+      setNotificationPrefs(DEFAULT_NOTIFICATION_PREFS);
+      return;
+    }
+    setNotificationPrefs(loadNotificationPrefs(activeUid));
+  }, [activeUid]);
+
+  const updateNotificationPrefs = useCallback(
+    (updater: (prev: NotificationPrefs) => NotificationPrefs) => {
+      setNotificationPrefs((prev) => {
+        const next = updater(prev);
+        if (activeUid) {
+          saveNotificationPrefs(activeUid, next);
+        }
+        return next;
+      });
+    },
+    [activeUid]
+  );
+
+  const enableMobileNotifications = useCallback(async (): Promise<BrowserNotificationPermission> => {
+    const perm = await requestMobileNotificationPermission();
+    setNotificationPermission(perm);
+    if (perm === 'granted') {
+      updateNotificationPrefs((prev) => ({
+        ...prev,
+        enabled: true,
+        pushToDeviceBar: true,
+      }));
+    }
+    return perm;
+  }, [updateNotificationPrefs]);
+
+  const allComputedNotifications = React.useMemo(() => {
+    if (!activeUid || !notificationPrefs.enabled) return [];
+    return computeFinTrackNotifications({
+      transactions,
+      budgets,
+      bills,
+      debtRecords,
+      savingsGoals,
+      recurringTransactions,
+      monthlyBudgetLimit: profile?.monthlyBudgetLimit || 0,
+      currency,
+      categories: notificationPrefs.categories,
+    });
+  }, [
+    activeUid,
+    notificationPrefs.enabled,
+    notificationPrefs.categories,
+    transactions,
+    budgets,
+    bills,
+    debtRecords,
+    savingsGoals,
+    recurringTransactions,
+    profile?.monthlyBudgetLimit,
+    currency,
+  ]);
+
+  const notifications = React.useMemo(() => {
+    const dismissedSet = new Set(notificationPrefs.dismissedSignatures);
+    return allComputedNotifications.filter((n) => !dismissedSet.has(n.signature));
+  }, [allComputedNotifications, notificationPrefs.dismissedSignatures]);
+
+  const unreadNotificationCount = React.useMemo(() => {
+    const readSet = new Set(notificationPrefs.readSignatures);
+    return notifications.filter((n) => !readSet.has(n.signature)).length;
+  }, [notifications, notificationPrefs.readSignatures]);
+
+  // Dispatch newly triggered alerts to the mobile/OS notification bar when permission is granted
+  useEffect(() => {
+    if (
+      !activeUid ||
+      dataLoading ||
+      !notificationPrefs.enabled ||
+      !notificationPrefs.pushToDeviceBar ||
+      notificationPermission !== 'granted' ||
+      notifications.length === 0
+    ) {
+      return;
+    }
+
+    const readSet = new Set(notificationPrefs.readSignatures);
+    const unread = notifications.filter((n) => !readSet.has(n.signature));
+    if (unread.length === 0) return;
+
+    void dispatchNewNotificationsToDeviceBar(activeUid, unread, getTodayStr());
+  }, [
+    activeUid,
+    dataLoading,
+    notificationPrefs.enabled,
+    notificationPrefs.pushToDeviceBar,
+    notificationPrefs.readSignatures,
+    notificationPermission,
+    notifications,
+  ]);
+
+  const markNotificationRead = useCallback(
+    (signature: string) => {
+      updateNotificationPrefs((prev) =>
+        prev.readSignatures.includes(signature)
+          ? prev
+          : { ...prev, readSignatures: [...prev.readSignatures, signature] }
+      );
+    },
+    [updateNotificationPrefs]
+  );
+
+  const markAllNotificationsRead = useCallback(() => {
+    updateNotificationPrefs((prev) => {
+      const merged = Array.from(
+        new Set([...prev.readSignatures, ...notifications.map((n) => n.signature)])
+      );
+      return { ...prev, readSignatures: merged };
+    });
+  }, [notifications, updateNotificationPrefs]);
+
+  const dismissNotification = useCallback(
+    (signature: string) => {
+      updateNotificationPrefs((prev) => ({
+        ...prev,
+        readSignatures: prev.readSignatures.includes(signature)
+          ? prev.readSignatures
+          : [...prev.readSignatures, signature],
+        dismissedSignatures: prev.dismissedSignatures.includes(signature)
+          ? prev.dismissedSignatures
+          : [...prev.dismissedSignatures, signature],
+      }));
+    },
+    [updateNotificationPrefs]
+  );
+
+  const restoreDismissedNotifications = useCallback(() => {
+    updateNotificationPrefs((prev) => ({
+      ...prev,
+      dismissedSignatures: [],
+      readSignatures: [],
+    }));
+  }, [updateNotificationPrefs]);
+
+  const sendTestNotification = useCallback(async () => {
+    return sendTestSystemNotification();
+  }, []);
+
+  const setMaintenanceEnabledMode = useCallback(
+    async (enabled: boolean) => {
+      if (!isAdmin) return;
+      setMaintenanceUpdating(true);
+      try {
+        await setMaintenanceMode(enabled);
+      } finally {
+        setMaintenanceUpdating(false);
+      }
+    },
+    [isAdmin]
+  );
+
   return (
     <FinanceContext.Provider
       value={{
@@ -413,6 +656,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         bills,
         recurringTransactions,
         pendingGuestMigrationCount,
+        notificationPrefs,
+        notifications,
+        unreadNotificationCount,
+        notificationPermission,
         toggleTheme,
         setCurrency,
         refreshAuthUser,
@@ -420,6 +667,18 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         exitGuestMode,
         migrateGuestToCloud,
         dismissGuestMigration,
+        enableMobileNotifications,
+        updateNotificationPrefs,
+        markNotificationRead,
+        markAllNotificationsRead,
+        dismissNotification,
+        restoreDismissedNotifications,
+        sendTestNotification,
+        isAdmin,
+        maintenanceEnabled,
+        maintenanceLoading,
+        maintenanceUpdating,
+        setMaintenanceEnabledMode,
       }}
     >
       {children}

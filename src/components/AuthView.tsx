@@ -10,9 +10,11 @@ import {
 } from 'firebase/auth';
 import {
   ArrowRight,
+  Building2,
   CheckCircle2,
   Eye,
   EyeOff,
+  Fingerprint,
   Lock,
   Mail,
   RefreshCw,
@@ -22,13 +24,28 @@ import {
 } from 'lucide-react';
 import { auth, FIREBASE_PROJECT_ID, googleProvider } from '../firebase';
 import { useFinance } from '../context/FinanceContext';
+import { PinSetupModal } from './PinSetupModal';
+import {
+  isAppSecurityConfigured,
+  loadSecurityConfig,
+  SecurityLockConfig,
+} from '../services/securityService';
 
 type AuthMode = 'login' | 'register' | 'forgot';
+type SignupAccountType = 'personal' | 'business' | 'other';
 
-export function AuthView() {
+export const PENDING_DISPLAY_NAME_KEY = 'fintrack-pending-displayname';
+
+interface AuthViewProps {
+  onBackToMaintenance?: () => void;
+}
+
+export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
   const { firebaseUser, refreshAuthUser, enterGuestMode } = useFinance();
   const [mode, setMode] = useState<AuthMode>('login');
+  const [accountType, setAccountType] = useState<SignupAccountType>('personal');
   const [fullName, setFullName] = useState('');
+  const [businessName, setBusinessName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -37,6 +54,10 @@ export function AuthView() {
   const [infoMsg, setInfoMsg] = useState('');
   const [needsEmailProviderSetup, setNeedsEmailProviderSetup] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [securityConfig, setSecurityConfig] = useState<SecurityLockConfig>(() =>
+    loadSecurityConfig()
+  );
 
   const handleGoogleSignIn = async () => {
     setErrorMsg('');
@@ -67,15 +88,28 @@ export function AuthView() {
       if (mode === 'login') {
         await signInWithEmailAndPassword(auth, email.trim(), password);
       } else if (mode === 'register') {
+        const cleanName = fullName.trim();
+        const cleanBusiness = businessName.trim();
+        if (!cleanName && !cleanBusiness) {
+          setErrorMsg('Please enter your name, business name, or workspace label.');
+          setLoading(false);
+          return;
+        }
         if (password.length < 6) {
           setErrorMsg('Password must be at least 6 characters.');
           setLoading(false);
           return;
         }
-        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        if (fullName.trim()) {
-          await updateProfile(cred.user, { displayName: fullName.trim() });
+        const combinedDisplayName = (
+          cleanName && cleanBusiness
+            ? `${cleanBusiness} (${cleanName})`
+            : cleanBusiness || cleanName
+        ).slice(0, 100);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(PENDING_DISPLAY_NAME_KEY, combinedDisplayName);
         }
+        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        await updateProfile(cred.user, { displayName: combinedDisplayName });
         await sendEmailVerification(cred.user);
         setInfoMsg('Account created! A verification email has been sent to your inbox.');
       } else if (mode === 'forgot') {
@@ -239,6 +273,21 @@ export function AuthView() {
             </span>
           </div>
 
+          {onBackToMaintenance && (
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex items-center justify-between gap-3">
+              <span className="text-xs text-amber-800 dark:text-amber-300 font-medium">
+                Scheduled Maintenance is active. Sign in with the admin account to manage it.
+              </span>
+              <button
+                type="button"
+                onClick={onBackToMaintenance}
+                className="px-2.5 py-1 rounded-md bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 text-xs font-semibold text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 whitespace-nowrap shrink-0"
+              >
+                Back
+              </button>
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
               {mode === 'login'
@@ -374,21 +423,71 @@ export function AuthView() {
 
           <form onSubmit={handleEmailAuth} className="space-y-4">
             {mode === 'register' && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Full Name
-                </label>
-                <div className="relative">
-                  <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    required
-                    maxLength={100}
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Aarav Sharma"
-                    className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
-                  />
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Account Type
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(
+                      [
+                        { id: 'personal', label: 'Personal' },
+                        { id: 'business', label: 'Business' },
+                        { id: 'other', label: 'Freelance / Other' },
+                      ] as { id: SignupAccountType; label: string }[]
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setAccountType(opt.id)}
+                        className={`py-1.5 px-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                          accountType === opt.id
+                            ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-500 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {accountType === 'business'
+                      ? 'Your Name (Optional if Business Name entered)'
+                      : 'Your Name'}
+                  </label>
+                  <div className="relative">
+                    <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      maxLength={60}
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      placeholder="e.g. Aarav Sharma"
+                      className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {accountType === 'business'
+                      ? 'Business / Shop / Organization Name'
+                      : 'Business Name / Team / Custom Label (Optional)'}
+                  </label>
+                  <div className="relative">
+                    <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      maxLength={60}
+                      value={businessName}
+                      onChange={(e) => setBusinessName(e.target.value)}
+                      placeholder="e.g. Sharma Traders, Apex Studio, Family Ledger"
+                      className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30 focus:border-emerald-600"
+                    />
+                  </div>
                 </div>
               </div>
             )}
@@ -454,11 +553,50 @@ export function AuthView() {
             </button>
           </form>
 
+          {/* Pre-Login PIN & Biometric Security Setup */}
+          <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                <Fingerprint className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                  {isAppSecurityConfigured(securityConfig)
+                    ? 'Pre-Login Lock Active'
+                    : 'PIN & Biometric Lock'}
+                </div>
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  {securityConfig.pinEnabled && securityConfig.biometricEnabled
+                    ? `${securityConfig.pinLength}-digit PIN & Biometrics enabled`
+                    : securityConfig.pinEnabled
+                    ? `${securityConfig.pinLength}-digit PIN enabled`
+                    : securityConfig.biometricEnabled
+                    ? 'Biometric lock enabled'
+                    : 'Require PIN or Fingerprint before login'}
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSecurityModalOpen(true)}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
+            >
+              {isAppSecurityConfigured(securityConfig) ? 'Manage' : 'Set Up'}
+            </button>
+          </div>
+
           <p className="text-xs text-center text-slate-500 dark:text-slate-400">
             Protected by Firebase Authentication &amp; user-isolated Cloud Firestore rules.
           </p>
         </div>
       </div>
+
+      <PinSetupModal
+        open={securityModalOpen}
+        ownerLabel={fullName.trim() || businessName.trim() || email.trim() || 'FinTrack Owner'}
+        onClose={() => setSecurityModalOpen(false)}
+        onUpdated={(next) => setSecurityConfig(next)}
+      />
     </div>
   );
 }

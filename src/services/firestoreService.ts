@@ -3,6 +3,7 @@ import {
   deleteDoc,
   doc,
   getDocs,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -16,6 +17,7 @@ import {
   BudgetRecord,
   CurrencyCode,
   DebtRecord,
+  MaintenanceConfig,
   RecurringTransaction,
   RecordStatus,
   SavingsGoal,
@@ -836,5 +838,46 @@ export async function wipeAllUserFirestoreData(uid: string): Promise<void> {
     await deleteDoc(doc(db, 'users', uid));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `users/${uid}`);
+  }
+}
+
+// --- Global App Maintenance Mode (Admin-Only Write, Public Non-PII Read) ---
+export function subscribeToMaintenanceConfig(
+  onUpdate: (config: MaintenanceConfig) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const ref = doc(db, 'appConfig', 'maintenance');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as Partial<MaintenanceConfig>;
+        onUpdate({
+          enabled: Boolean(data.enabled),
+          updatedAt: data.updatedAt ?? null,
+        });
+      } else {
+        onUpdate({ enabled: false, updatedAt: null });
+      }
+    },
+    (error) => {
+      if (onError) {
+        onError(error);
+      } else {
+        console.error('Failed to read maintenance status:', error);
+      }
+    }
+  );
+}
+
+export async function setMaintenanceMode(enabled: boolean): Promise<void> {
+  const path = 'appConfig/maintenance';
+  try {
+    await setDoc(doc(db, 'appConfig', 'maintenance'), {
+      enabled: Boolean(enabled),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }

@@ -12,6 +12,7 @@
    - Once a `DebtRecord` reaches `status == 'paid'`, it cannot be mutated further.
    - Once a `BillRecord` with `frequency == 'one_time'` reaches `status == 'paid'`, it cannot be mutated further.
 6. **Strict Payload & Size Caps**: Every string field enforces `.size()` limits, every numeric amount validates bounds (`> 0` or `>= 0`), and every document enforces `keys().hasAll(...)` + `keys().hasOnly(...)` on create and `affectedKeys().hasOnly(...)` on update.
+7. **Admin-Only Global Maintenance Control**: `/appConfig/maintenance` stores only non-PII operational state (`enabled`, `updatedAt`). `get` is permitted for `configId == 'maintenance'` (with `list: if false`) so all visitors see scheduled maintenance immediately, while `create`/`update` require `request.auth.token.email_verified == true && request.auth.token.email == 'maind.go2000@gmail.com'`.
 
 ## 2. The "Dirty Dozen" Attack Payloads (All Must Return PERMISSION_DENIED)
 1. **Cross-Tenant Read/List**: User B (`uid: "userB"`) attempts `getDoc` or `getDocs` on `/users/userA/transactions`.
@@ -26,3 +27,4 @@
 10. **Orphaned Payment Injection**: User A attempts to create `/users/userA/recordPayments/pay1` pointing to a non-existent `parentId: "nonexistent123"`.
 11. **Terminal State Bypass**: User A attempts to modify `totalAmount` on a `DebtRecord` whose `status` is already `'paid'`.
 12. **Resource Exhaustion (1MB String Bomb)**: User A attempts to create a transaction with `notes` of 50,000 characters or `receiptDataUrl` exceeding 250,000 characters.
+13. **Unauthorized Maintenance Toggle**: A non-admin or unverified-email user attempts to write `/appConfig/maintenance` or list `/appConfig`.

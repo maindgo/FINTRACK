@@ -20,6 +20,12 @@ service cloud.firestore {
       return isOwner(userId) && request.auth.token.email_verified == true;
     }
 
+    function isMaintenanceAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'maind.go2000@gmail.com';
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -203,7 +209,29 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidMaintenanceConfig(data) {
+      return data.keys().hasAll(['enabled', 'updatedAt'])
+        && data.keys().hasOnly(['enabled', 'updatedAt'])
+        && data.enabled is bool
+        && data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
+    match /appConfig/{configId} {
+      allow get: if configId == 'maintenance';
+      allow list: if false;
+      allow create: if configId == 'maintenance'
+        && isMaintenanceAdmin()
+        && isValidMaintenanceConfig(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if configId == 'maintenance'
+        && isMaintenanceAdmin()
+        && isValidMaintenanceConfig(incoming())
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['enabled', 'updatedAt']);
+      allow delete: if false;
+    }
+
     match /users/{userId} {
       allow get: if isOwner(userId) && isValidId(userId);
       allow list: if false;

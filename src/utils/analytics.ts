@@ -3,6 +3,7 @@ import {
   BudgetRecord,
   CurrencyCode,
   DebtRecord,
+  RecurringTransaction,
   SavingsGoal,
   TransactionRecord,
 } from '../types/finance';
@@ -172,6 +173,95 @@ export function buildMonthlySeries(
     });
   }
   return points;
+}
+
+export interface MonthComparisonPoint {
+  day: number;
+  label: string;
+  currentDaily: number | null;
+  previousDaily: number;
+  currentCumulative: number | null;
+  previousCumulative: number;
+}
+
+export interface MonthSpendingComparison {
+  currentMonthLabel: string;
+  previousMonthLabel: string;
+  currentTotal: number;
+  previousSameDayTotal: number;
+  previousFullTotal: number;
+  paceDiffPct: number | null;
+  points: MonthComparisonPoint[];
+}
+
+export function buildMonthSpendingComparison(
+  transactions: TransactionRecord[]
+): MonthSpendingComparison {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonthIdx = now.getMonth();
+  const currentDayOfMonth = now.getDate();
+
+  const currentMonthKey = `${currentYear}-${String(currentMonthIdx + 1).padStart(2, '0')}`;
+  const prevDate = new Date(currentYear, currentMonthIdx - 1, 1);
+  const prevYear = prevDate.getFullYear();
+  const prevMonthIdx = prevDate.getMonth();
+  const prevMonthKey = `${prevYear}-${String(prevMonthIdx + 1).padStart(2, '0')}`;
+
+  const daysInCurrent = new Date(currentYear, currentMonthIdx + 1, 0).getDate();
+  const daysInPrev = new Date(prevYear, prevMonthIdx + 1, 0).getDate();
+  const totalDays = Math.max(daysInCurrent, daysInPrev);
+
+  const currByDay = new Array<number>(totalDays + 1).fill(0);
+  const prevByDay = new Array<number>(totalDays + 1).fill(0);
+
+  for (const t of transactions) {
+    if (t.type !== 'expense') continue;
+    if (t.date.startsWith(currentMonthKey)) {
+      const d = Number(t.date.slice(8, 10));
+      if (d >= 1 && d <= totalDays) currByDay[d] += t.amount;
+    } else if (t.date.startsWith(prevMonthKey)) {
+      const d = Number(t.date.slice(8, 10));
+      if (d >= 1 && d <= totalDays) prevByDay[d] += t.amount;
+    }
+  }
+
+  const points: MonthComparisonPoint[] = [];
+  let currCum = 0;
+  let prevCum = 0;
+  let previousSameDayTotal = 0;
+
+  for (let day = 1; day <= totalDays; day++) {
+    prevCum += prevByDay[day];
+    if (day <= currentDayOfMonth) {
+      currCum += currByDay[day];
+      previousSameDayTotal = prevCum;
+    }
+
+    points.push({
+      day,
+      label: `Day ${day}`,
+      currentDaily: day <= currentDayOfMonth ? Number(currByDay[day].toFixed(2)) : null,
+      previousDaily: Number(prevByDay[day].toFixed(2)),
+      currentCumulative: day <= currentDayOfMonth ? Number(currCum.toFixed(2)) : null,
+      previousCumulative: Number(prevCum.toFixed(2)),
+    });
+  }
+
+  const paceDiffPct =
+    previousSameDayTotal > 0
+      ? ((currCum - previousSameDayTotal) / previousSameDayTotal) * 100
+      : null;
+
+  return {
+    currentMonthLabel: now.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
+    previousMonthLabel: prevDate.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
+    currentTotal: currCum,
+    previousSameDayTotal,
+    previousFullTotal: prevCum,
+    paceDiffPct,
+    points,
+  };
 }
 
 export interface SmartInsightsData {
@@ -424,5 +514,202 @@ export function computeSmartInsights(
       exceededCount,
     },
     suggestions,
+  };
+}
+
+export interface MonthlyExpenseForecast {
+  nextMonthLabel: string;
+  estimatedExpense: number;
+  rangeLow: number;
+  rangeHigh: number;
+  lastMonthExpense: number;
+  currentMonthProjected: number;
+  scheduledCommitments: number;
+  deltaVsLastMonthPct: number | null;
+  confidence: 'High' | 'Medium' | 'Building';
+  historyMonthsUsed: number;
+  topCategories: {
+    category: string;
+    projectedAmount: number;
+    sharePct: number;
+  }[];
+  methodologyNote: string;
+}
+
+export function computeMonthlyExpenseForecast(
+  transactions: TransactionRecord[],
+  recurringTransactions: RecurringTransaction[],
+  bills: BillRecord[]
+): MonthlyExpenseForecast {
+  const now = new Date();
+  const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const nextMonthLabel = nextMonthDate.toLocaleDateString('en-IN', {
+    month: 'short',
+    year: 'numeric',
+  });
+  const nextMonthKey = `${nextMonthDate.getFullYear()}-${String(
+    nextMonthDate.getMonth() + 1
+  ).padStart(2, '0')}`;
+
+  const currentMonthKey = getCurrentMonthStr();
+  const prevMonthKey = getPreviousMonthStr(currentMonthKey);
+  const daysInCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const currentDay = Math.max(1, now.getDate());
+
+  const expenses = transactions.filter((t) => t.type === 'expense');
+
+  // Group expenses by YYYY-MM
+  const monthTotals = new Map<string, number>();
+  for (const tx of expenses) {
+    const mk = tx.date.slice(0, 7);
+    monthTotals.set(mk, (monthTotals.get(mk) || 0) + tx.amount);
+  }
+
+  const currentMonthSpent = monthTotals.get(currentMonthKey) || 0;
+  const lastMonthExpense = monthTotals.get(prevMonthKey) || 0;
+
+  // Collect up to 6 completed prior months that have data
+  const priorMonthKeys: string[] = [];
+  for (let i = 1; i <= 6; i++) {
+    const dt = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const mk = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+    if ((monthTotals.get(mk) || 0) > 0) {
+      priorMonthKeys.push(mk);
+    }
+  }
+
+  // Current month run-rate projection
+  const currentMonthProjected =
+    currentMonthSpent > 0
+      ? currentDay >= 4
+        ? (currentMonthSpent / currentDay) * daysInCurrentMonth
+        : currentMonthSpent
+      : 0;
+
+  // Weighted moving average across prior months (recent months weighted higher)
+  const weights = [3.0, 2.2, 1.6, 1.2, 1.0, 0.8];
+  let weightedSum = 0;
+  let totalWeight = 0;
+  priorMonthKeys.forEach((mk, idx) => {
+    const val = monthTotals.get(mk) || 0;
+    const w = weights[idx] ?? 1;
+    weightedSum += val * w;
+    totalWeight += w;
+  });
+
+  const historicalWeightedAvg = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
+  // Scheduled recurring expenses & active monthly/next-month bills
+  const recurringMonthlyEquivalent = recurringTransactions
+    .filter((r) => r.isActive && r.type === 'expense')
+    .reduce((sum, r) => {
+      if (r.frequency === 'daily') return sum + r.amount * 30;
+      if (r.frequency === 'weekly') return sum + r.amount * 4.33;
+      if (r.frequency === 'monthly') return sum + r.amount;
+      if (r.frequency === 'yearly') return sum + r.amount / 12;
+      return sum;
+    }, 0);
+
+  const upcomingBillsTotal = bills
+    .filter((b) => {
+      if (b.frequency === 'monthly') return true;
+      if (b.frequency === 'one_time' && b.status !== 'paid' && b.dueDate.startsWith(nextMonthKey)) {
+        return true;
+      }
+      return false;
+    })
+    .reduce((sum, b) => sum + b.amount, 0);
+
+  const scheduledCommitments = Number((recurringMonthlyEquivalent + upcomingBillsTotal).toFixed(2));
+
+  // Blend historical weighted average with current-month pace (if mid/late month)
+  let baseEstimate = 0;
+  if (historicalWeightedAvg > 0 && currentMonthProjected > 0 && currentDay >= 7) {
+    const paceWeight = Math.min(0.45, currentDay / daysInCurrentMonth / 2);
+    baseEstimate = historicalWeightedAvg * (1 - paceWeight) + currentMonthProjected * paceWeight;
+  } else if (historicalWeightedAvg > 0) {
+    baseEstimate = historicalWeightedAvg;
+  } else if (currentMonthProjected > 0) {
+    baseEstimate = currentMonthProjected;
+  }
+
+  const estimatedExpense = Math.max(
+    Number(baseEstimate.toFixed(2)),
+    Number(scheduledCommitments.toFixed(2))
+  );
+
+  // Variability / confidence band
+  const historyValues = priorMonthKeys.map((mk) => monthTotals.get(mk) || 0);
+  if (currentMonthProjected > 0 && currentDay >= 10) {
+    historyValues.push(currentMonthProjected);
+  }
+  let spreadRatio = 0.12;
+  if (historyValues.length >= 2 && estimatedExpense > 0) {
+    const mean = historyValues.reduce((s, v) => s + v, 0) / historyValues.length;
+    const variance =
+      historyValues.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / historyValues.length;
+    const stdDev = Math.sqrt(variance);
+    spreadRatio = Math.min(0.3, Math.max(0.07, stdDev / Math.max(mean, 1)));
+  }
+
+  const rangeLow = Math.max(scheduledCommitments, Number((estimatedExpense * (1 - spreadRatio)).toFixed(2)));
+  const rangeHigh = Number((estimatedExpense * (1 + spreadRatio)).toFixed(2));
+
+  const baselineForDelta = lastMonthExpense > 0 ? lastMonthExpense : historicalWeightedAvg;
+  const deltaVsLastMonthPct =
+    baselineForDelta > 0 && estimatedExpense > 0
+      ? ((estimatedExpense - baselineForDelta) / baselineForDelta) * 100
+      : null;
+
+  // Project top 3 categories using recent 90-day expense distribution scaled to estimatedExpense
+  const recentCutoff = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  const cutoffStr = `${recentCutoff.getFullYear()}-${String(recentCutoff.getMonth() + 1).padStart(2, '0')}-01`;
+  const recentExpenses = expenses.filter((e) => e.date >= cutoffStr);
+  const catPool = recentExpenses.length > 0 ? recentExpenses : expenses;
+  const catMap = new Map<string, number>();
+  let catPoolSum = 0;
+  for (const tx of catPool) {
+    catPoolSum += tx.amount;
+    catMap.set(tx.category, (catMap.get(tx.category) || 0) + tx.amount);
+  }
+
+  const topCategories = Array.from(catMap.entries())
+    .map(([category, amt]) => {
+      const sharePct = catPoolSum > 0 ? (amt / catPoolSum) * 100 : 0;
+      return {
+        category,
+        projectedAmount: Number(((estimatedExpense * sharePct) / 100).toFixed(2)),
+        sharePct,
+      };
+    })
+    .sort((a, b) => b.projectedAmount - a.projectedAmount)
+    .slice(0, 3);
+
+  const totalMonthsDetected = priorMonthKeys.length + (currentMonthSpent > 0 ? 1 : 0);
+  const confidence: MonthlyExpenseForecast['confidence'] =
+    priorMonthKeys.length >= 3 ? 'High' : totalMonthsDetected >= 1 ? 'Medium' : 'Building';
+
+  const methodologyNote =
+    priorMonthKeys.length >= 2
+      ? `Estimated from ${priorMonthKeys.length} prior month${priorMonthKeys.length > 1 ? 's' : ''}, current month pace, and scheduled commitments.`
+      : totalMonthsDetected === 1
+      ? 'Estimated from current transaction run-rate and scheduled bills/recurring entries.'
+      : scheduledCommitments > 0
+      ? 'Based on your active monthly bills and recurring expense commitments.'
+      : 'Add expenses across a few weeks to unlock historical trend forecasting.';
+
+  return {
+    nextMonthLabel,
+    estimatedExpense,
+    rangeLow,
+    rangeHigh,
+    lastMonthExpense,
+    currentMonthProjected: Number(currentMonthProjected.toFixed(2)),
+    scheduledCommitments,
+    deltaVsLastMonthPct,
+    confidence,
+    historyMonthsUsed: totalMonthsDetected,
+    topCategories,
+    methodologyNote,
   };
 }

@@ -517,9 +517,30 @@
         }
       },
       "required": ["userId", "type", "title", "amount", "category", "paymentMethod", "frequency", "startDate", "nextRunDate", "lastRunDate", "isActive", "description", "createdAt", "updatedAt"]
+    },
+    "MaintenanceConfig": {
+      "title": "MaintenanceConfig",
+      "description": "Global application maintenance mode toggle controlled exclusively by verified admin.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the application is currently in scheduled maintenance mode."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last maintenance toggle."
+        }
+      },
+      "required": ["enabled", "updatedAt"]
     }
   },
   "firestore": {
+    "/appConfig/{configId}": {
+      "schema": { "$ref": "#/entities/MaintenanceConfig" },
+      "description": "Publicly readable non-PII global app configuration (restricted to 'maintenance' document, writable only by verified admin)."
+    },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "Private user profile, currency, theme, and overall monthly budget setting."

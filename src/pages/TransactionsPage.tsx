@@ -1,18 +1,28 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowUpDown,
+  Calendar,
   Download,
   Edit2,
+  Filter,
   Paperclip,
   Plus,
+  RotateCcw,
   Search,
   Trash2,
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { TransactionRecord, TransactionType } from '../types/finance';
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../utils/constants';
-import { formatCurrency, formatReadableDate } from '../utils/formatters';
 import {
+  formatCurrency,
+  formatReadableDate,
+  getDateRangeForFilter,
+  getTodayStr,
+} from '../utils/formatters';
+import {
+  exportGeneralLedgerToExcel,
+  exportGeneralLedgerToPDF,
   exportTransactionsToCSV,
   exportTransactionsToExcel,
   exportTransactionsToPDF,
@@ -34,24 +44,73 @@ export function TransactionsPage({
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const [datePreset, setDatePreset] = useState<'all' | 'today' | 'week' | 'month' | 'last30' | 'custom'>('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>(
     'date_desc'
   );
 
-  const allCategories = [...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES];
+  const hasActiveFilters =
+    search.trim() !== '' ||
+    typeFilter !== 'all' ||
+    categoryFilter !== 'All' ||
+    datePreset !== 'all' ||
+    startDate !== '' ||
+    endDate !== '' ||
+    minAmount !== '' ||
+    maxAmount !== '';
+
+  const resetAllFilters = () => {
+    setSearch('');
+    setTypeFilter('all');
+    setCategoryFilter('All');
+    setDatePreset('all');
+    setStartDate('');
+    setEndDate('');
+    setMinAmount('');
+    setMaxAmount('');
+    setSortBy('date_desc');
+  };
+
+  const resolvedDateRange = useMemo(() => {
+    if (datePreset === 'all') return { start: '', end: '' };
+    if (datePreset === 'custom') return { start: startDate, end: endDate };
+    if (datePreset === 'last30') {
+      const now = new Date();
+      const past = new Date(now);
+      past.setDate(now.getDate() - 29);
+      const start = `${past.getFullYear()}-${String(past.getMonth() + 1).padStart(2, '0')}-${String(
+        past.getDate()
+      ).padStart(2, '0')}`;
+      return { start, end: getTodayStr() };
+    }
+    const r = getDateRangeForFilter(datePreset);
+    return { start: r.start, end: r.end };
+  }, [datePreset, startDate, endDate]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const minVal = minAmount.trim() !== '' ? Number(minAmount) : null;
+    const maxVal = maxAmount.trim() !== '' ? Number(maxAmount) : null;
+
     const list = transactions.filter((t) => {
       if (typeFilter !== 'all' && t.type !== typeFilter) return false;
       if (categoryFilter !== 'All' && t.category !== categoryFilter) return false;
+      if (resolvedDateRange.start && t.date < resolvedDateRange.start) return false;
+      if (resolvedDateRange.end && t.date > resolvedDateRange.end) return false;
+      if (minVal !== null && Number.isFinite(minVal) && t.amount < minVal) return false;
+      if (maxVal !== null && Number.isFinite(maxVal) && t.amount > maxVal) return false;
       if (!q) return true;
       return (
         t.title.toLowerCase().includes(q) ||
         t.category.toLowerCase().includes(q) ||
         t.paymentMethod.toLowerCase().includes(q) ||
         t.description.toLowerCase().includes(q) ||
-        t.notes.toLowerCase().includes(q)
+        t.notes.toLowerCase().includes(q) ||
+        String(t.amount).includes(q)
       );
     });
 
@@ -69,7 +128,16 @@ export function TransactionsPage({
     });
 
     return list;
-  }, [transactions, search, typeFilter, categoryFilter, sortBy]);
+  }, [
+    transactions,
+    search,
+    typeFilter,
+    categoryFilter,
+    resolvedDateRange,
+    minAmount,
+    maxAmount,
+    sortBy,
+  ]);
 
   const filteredTotals = useMemo(() => {
     const inc = filtered.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
@@ -119,6 +187,24 @@ export function TransactionsPage({
           </button>
           <button
             type="button"
+            onClick={() => exportGeneralLedgerToExcel(filtered, currency)}
+            disabled={filtered.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Ledger Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => exportGeneralLedgerToPDF(filtered, currency)}
+            disabled={filtered.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Ledger PDF
+          </button>
+          <button
+            type="button"
             onClick={() => onAddNew('expense')}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap"
           >
@@ -129,60 +215,162 @@ export function TransactionsPage({
       </div>
 
       {/* Filter Toolbar */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, category, notes..."
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
-          />
-        </div>
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search title, category, notes, amount..."
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+            />
+          </div>
 
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
-          {(['all', 'income', 'expense'] as const).map((tp) => (
-            <button
-              key={tp}
-              type="button"
-              onClick={() => setTypeFilter(tp)}
-              className={`flex-1 py-1.5 text-xs font-medium rounded-md capitalize transition-colors ${
-                typeFilter === tp
-                  ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400'
-              }`}
+          <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            {(['all', 'income', 'expense'] as const).map((tp) => (
+              <button
+                key={tp}
+                type="button"
+                onClick={() => setTypeFilter(tp)}
+                className={`flex-1 py-1.5 text-xs font-medium rounded-md capitalize transition-colors ${
+                  typeFilter === tp
+                    ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                {tp}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative">
+            <Filter className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="Filter by category"
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
             >
-              {tp}
-            </button>
-          ))}
+              <option value="All">All Categories</option>
+              {typeFilter !== 'expense' && (
+                <optgroup label="Income Categories">
+                  {INCOME_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {typeFilter !== 'income' && (
+                <optgroup label="Expense Categories">
+                  {EXPENSE_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
+
+          <div className="relative">
+            <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+              aria-label="Sort transactions"
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+            >
+              <option value="date_desc">Date: Newest First</option>
+              <option value="date_asc">Date: Oldest First</option>
+              <option value="amount_desc">Amount: Highest First</option>
+              <option value="amount_asc">Amount: Lowest First</option>
+            </select>
+          </div>
         </div>
 
-        <select
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          className="px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
-        >
-          <option value="All">All Categories</option>
-          {allCategories.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+        {/* Date Range & Amount Range Controls */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="relative">
+            <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <select
+              value={datePreset}
+              onChange={(e) => setDatePreset(e.target.value as typeof datePreset)}
+              aria-label="Filter by date range"
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+            >
+              <option value="all">Date Range: All Time</option>
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="last30">Last 30 Days</option>
+              <option value="custom">Custom Date Range</option>
+            </select>
+          </div>
 
-        <div className="relative">
-          <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-            className="w-full pl-8 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
-          >
-            <option value="date_desc">Date: Newest First</option>
-            <option value="date_asc">Date: Oldest First</option>
-            <option value="amount_desc">Amount: Highest First</option>
-            <option value="amount_asc">Amount: Lowest First</option>
-          </select>
+          {datePreset === 'custom' ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                aria-label="Start date"
+                className="w-full px-2.5 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+              />
+              <span className="text-xs text-slate-400 shrink-0">to</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                aria-label="End date"
+                className="w-full px-2.5 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+              />
+            </div>
+          ) : (
+            <div className="flex items-center px-3 py-2 text-[11px] font-mono text-slate-500 dark:text-slate-400 rounded-lg bg-slate-50/60 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800">
+              {resolvedDateRange.start && resolvedDateRange.end
+                ? `${resolvedDateRange.start} → ${resolvedDateRange.end}`
+                : 'Showing all dates'}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={minAmount}
+              onChange={(e) => setMinAmount(e.target.value)}
+              placeholder={`Min ${currency}`}
+              aria-label="Minimum amount"
+              className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+            />
+            <span className="text-xs text-slate-400 shrink-0">–</span>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={maxAmount}
+              onChange={(e) => setMaxAmount(e.target.value)}
+              placeholder={`Max ${currency}`}
+              aria-label="Maximum amount"
+              className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700"
+            />
+          </div>
+
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              disabled={!hasActiveFilters}
+              onClick={resetAllFilters}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 whitespace-nowrap"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Reset Filters
+            </button>
+          </div>
         </div>
       </div>
 

@@ -2,21 +2,40 @@ import React, { useEffect, useState } from 'react';
 import { deleteUser, signOut } from 'firebase/auth';
 import {
   AlertTriangle,
+  Bell,
+  BellRing,
   Check,
   Database,
   Download,
+  Fingerprint,
+  Lock,
   LogIn,
   Moon,
+  Send,
+  ShieldCheck,
   Sun,
   Trash2,
   Upload,
+  Wrench,
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { useFinance } from '../context/FinanceContext';
 import { GUEST_UID } from '../services/guestStore';
-import { CurrencyCode } from '../types/finance';
+import { isRunningInIframe } from '../services/notificationService';
+import { PinSetupModal } from '../components/PinSetupModal';
+import {
+  clearSecurityConfig,
+  isAppSecurityConfigured,
+  loadSecurityConfig,
+  saveSecurityConfig,
+  SECURITY_EVENT,
+  SecurityLockConfig,
+} from '../services/securityService';
+import { CurrencyCode, NotificationCategoryPrefs } from '../types/finance';
 import { CURRENCIES, FIELD_LIMITS } from '../utils/constants';
 import {
+  exportErpFullReportToPDF,
+  exportErpFullWorkbookToExcel,
   exportJsonBackup,
   exportTransactionsToCSV,
   exportTransactionsToExcel,
@@ -48,6 +67,15 @@ export function SettingsPage() {
     bills,
     recurringTransactions,
     recordPayments,
+    notificationPrefs,
+    notificationPermission,
+    enableMobileNotifications,
+    updateNotificationPrefs,
+    sendTestNotification,
+    isAdmin,
+    maintenanceEnabled,
+    maintenanceUpdating,
+    setMaintenanceEnabledMode,
   } = useFinance();
 
   const [displayName, setDisplayName] = useState(profile?.displayName || user?.displayName || '');
@@ -55,6 +83,18 @@ export function SettingsPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savedNotice, setSavedNotice] = useState('');
   const [restoreMsg, setRestoreMsg] = useState('');
+  const [notifFeedback, setNotifFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [requestingNotif, setRequestingNotif] = useState(false);
+  const [securityConfig, setSecurityConfig] = useState<SecurityLockConfig>(() =>
+    loadSecurityConfig()
+  );
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setSecurityConfig(loadSecurityConfig());
+    window.addEventListener(SECURITY_EVENT, sync);
+    return () => window.removeEventListener(SECURITY_EVENT, sync);
+  }, []);
 
   // Account Deletion state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -304,6 +344,398 @@ export function SettingsPage() {
         </div>
       </form>
 
+      {/* Notifications & Mobile Notification Bar */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <BellRing className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Notifications &amp; Mobile Notification Bar
+            </h3>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold w-fit ${
+              notificationPermission === 'granted'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                : notificationPermission === 'denied'
+                ? 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+            }`}
+          >
+            <Bell className="w-3 h-3" />
+            {notificationPermission === 'granted'
+              ? 'Phone Permission: Granted'
+              : notificationPermission === 'denied'
+              ? 'Phone Permission: Blocked'
+              : notificationPermission === 'default'
+              ? 'Phone Permission: Not Enabled'
+              : 'Device Notification API Unsupported'}
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+          Turn on browser notification permission on your phone to display overdue bills, upcoming EMIs,
+          budget warnings, loan due dates, savings milestones, and unusual spending alerts directly in your
+          mobile notification bar.
+        </p>
+
+        {isRunningInIframe() && notificationPermission !== 'granted' && (
+          <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300">
+            Note: Mobile browsers often block system notification prompts inside embedded preview frames.
+            If tapping &ldquo;Allow Phone Notifications&rdquo; does not prompt, open FinTrack directly in
+            Chrome/Safari on your mobile phone.
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+            <button
+              type="button"
+              disabled={requestingNotif || notificationPermission === 'denied'}
+              onClick={async () => {
+                setRequestingNotif(true);
+                setNotifFeedback(null);
+                try {
+                  const res = await enableMobileNotifications();
+                  if (res === 'granted') {
+                    setNotifFeedback({
+                      ok: true,
+                      text: 'Permission granted! Alerts will now appear in your phone notification bar.',
+                    });
+                  } else if (res === 'denied') {
+                    setNotifFeedback({
+                      ok: false,
+                      text: 'Permission was blocked. Allow notifications for this site in your mobile browser settings.',
+                    });
+                  }
+                } finally {
+                  setRequestingNotif(false);
+                }
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+            >
+              <BellRing className="w-3.5 h-3.5" />
+              {requestingNotif
+                ? 'Requesting...'
+                : notificationPermission === 'denied'
+                ? 'Blocked in Browser Settings'
+                : 'Allow Phone Notifications'}
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={async () => {
+              const res = await sendTestNotification();
+              setNotifFeedback({ ok: res.ok, text: res.message });
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+          >
+            <Send className="w-3.5 h-3.5" />
+            Send Test Notification
+          </button>
+        </div>
+
+        {notifFeedback && (
+          <div
+            className={`p-3 rounded-lg text-xs border ${
+              notifFeedback.ok
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+            }`}
+          >
+            {notifFeedback.text}
+          </div>
+        )}
+
+        {/* Master & Delivery Toggles */}
+        <div className="grid sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={notificationPrefs.enabled}
+              onChange={(e) =>
+                updateNotificationPrefs((prev) => ({ ...prev, enabled: e.target.checked }))
+              }
+              className="mt-0.5 accent-emerald-600"
+            />
+            <div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                Enable Smart Alerts
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Compute financial alerts &amp; bell badge
+              </div>
+            </div>
+          </label>
+
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={notificationPrefs.pushToDeviceBar}
+              disabled={!notificationPrefs.enabled}
+              onChange={(e) =>
+                updateNotificationPrefs((prev) => ({ ...prev, pushToDeviceBar: e.target.checked }))
+              }
+              className="mt-0.5 accent-emerald-600"
+            />
+            <div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                Mobile Notification Bar
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Push alerts to phone status bar when allowed
+              </div>
+            </div>
+          </label>
+
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={notificationPrefs.showTopAlertBanner}
+              disabled={!notificationPrefs.enabled}
+              onChange={(e) =>
+                updateNotificationPrefs((prev) => ({
+                  ...prev,
+                  showTopAlertBanner: e.target.checked,
+                }))
+              }
+              className="mt-0.5 accent-emerald-600"
+            />
+            <div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                Urgent Top Banner
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Highlight overdue or critical alerts at top
+              </div>
+            </div>
+          </label>
+        </div>
+
+        {/* Category Preferences */}
+        <div className="space-y-2.5">
+          <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+            Alert Categories
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {(
+              [
+                {
+                  key: 'bills',
+                  label: 'Bills, EMIs & Subscriptions',
+                  desc: 'Overdue & due within 3 days',
+                },
+                {
+                  key: 'budgets',
+                  label: 'Budgets & Monthly Cap',
+                  desc: 'Threshold warnings & overspend',
+                },
+                {
+                  key: 'debts',
+                  label: 'Loans, Debts & Collections',
+                  desc: 'Repayment & collection due dates',
+                },
+                {
+                  key: 'insights',
+                  label: 'Spending Spikes & Cash Flow',
+                  desc: 'Unusual expenses & monthly deficit',
+                },
+                {
+                  key: 'savings',
+                  label: 'Savings Goal Milestones',
+                  desc: '100% funded & 7-day target reminders',
+                },
+                {
+                  key: 'recurring',
+                  label: 'Recurring Schedules',
+                  desc: 'Entries scheduled today or tomorrow',
+                },
+              ] as { key: keyof NotificationCategoryPrefs; label: string; desc: string }[]
+            ).map((cat) => (
+              <label
+                key={cat.key}
+                className="flex items-start gap-2.5 p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40"
+              >
+                <input
+                  type="checkbox"
+                  disabled={!notificationPrefs.enabled}
+                  checked={notificationPrefs.categories[cat.key]}
+                  onChange={(e) =>
+                    updateNotificationPrefs((prev) => ({
+                      ...prev,
+                      categories: {
+                        ...prev.categories,
+                        [cat.key]: e.target.checked,
+                      },
+                    }))
+                  }
+                  className="mt-0.5 accent-emerald-600"
+                />
+                <div>
+                  <div className="text-xs font-medium text-slate-900 dark:text-white">
+                    {cat.label}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400">{cat.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* App Security: PIN Lock & Biometric Auth */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              App Security · PIN Lock &amp; Biometric Auth
+            </h3>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border ${
+                securityConfig.pinEnabled
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+              }`}
+            >
+              <Lock className="w-3 h-3" />
+              {securityConfig.pinEnabled ? `${securityConfig.pinLength}-Digit PIN On` : 'PIN Off'}
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold border ${
+                securityConfig.biometricEnabled
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
+              }`}
+            >
+              <Fingerprint className="w-3 h-3" />
+              {securityConfig.biometricEnabled ? 'Biometrics On' : 'Biometrics Off'}
+            </span>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+          Require a 4–6 digit PIN code and/or device Fingerprint / Face ID before logging in and whenever FinTrack reopens.
+        </p>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <label className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              disabled={!isAppSecurityConfigured(securityConfig)}
+              checked={securityConfig.lockBeforeLogin}
+              onChange={(e) => {
+                const next = { ...securityConfig, lockBeforeLogin: e.target.checked };
+                saveSecurityConfig(next);
+                setSecurityConfig(next);
+              }}
+              className="mt-0.5 accent-emerald-600"
+            />
+            <div>
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                Require Lock Before Login &amp; On Launch
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Show PIN / Biometric lock screen on startup before accessing login or ledger
+              </div>
+            </div>
+          </label>
+
+          <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5">
+            <label className="block text-xs font-semibold text-slate-900 dark:text-white">
+              Auto-Lock When Backgrounded
+            </label>
+            <select
+              disabled={!isAppSecurityConfigured(securityConfig)}
+              value={securityConfig.autoLockMinutes}
+              onChange={(e) => {
+                const next = { ...securityConfig, autoLockMinutes: Number(e.target.value) };
+                saveSecurityConfig(next);
+                setSecurityConfig(next);
+              }}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700"
+            >
+              <option value={0}>On startup / manual lock only</option>
+              <option value={1}>After 1 minute away</option>
+              <option value={5}>After 5 minutes away</option>
+              <option value={15}>After 15 minutes away</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setSecurityModalOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90"
+          >
+            <Fingerprint className="w-3.5 h-3.5" />
+            {isAppSecurityConfigured(securityConfig)
+              ? 'Manage PIN & Biometrics'
+              : 'Set Up PIN & Biometrics'}
+          </button>
+
+          {isAppSecurityConfigured(securityConfig) && (
+            <button
+              type="button"
+              onClick={() => {
+                clearSecurityConfig();
+                setSecurityConfig(loadSecurityConfig());
+              }}
+              className="px-3.5 py-2 rounded-lg border border-red-200 dark:border-red-900 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
+            >
+              Disable All App Locks
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Admin-Only Scheduled Maintenance Control */}
+      {isAdmin && (
+        <div className="bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-800 rounded-xl p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Admin · Scheduled Maintenance Control
+              </h3>
+            </div>
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold w-fit border ${
+                maintenanceEnabled
+                  ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+              }`}
+            >
+              {maintenanceEnabled ? 'Maintenance Mode: ON' : 'App Status: Live'}
+            </span>
+          </div>
+          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+            When turned ON, FinTrack routes all visitors and regular users to the Scheduled Maintenance page displaying the upcoming AI &amp; Budget Forecasting update details and scrolling support banner.
+          </p>
+          <button
+            type="button"
+            disabled={maintenanceUpdating}
+            onClick={() => setMaintenanceEnabledMode(!maintenanceEnabled)}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 ${
+              maintenanceEnabled
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-amber-600 text-white hover:bg-amber-700'
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            {maintenanceUpdating
+              ? 'Updating Maintenance Status...'
+              : maintenanceEnabled
+              ? 'Turn Off Scheduled Maintenance'
+              : 'Turn On Scheduled Maintenance'}
+          </button>
+        </div>
+      )}
+
       {/* Data Backup & Export */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-5">
         <div className="flex items-center gap-2">
@@ -352,6 +784,46 @@ export function SettingsPage() {
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium"
           >
             PDF Statement
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              exportErpFullWorkbookToExcel({
+                ownerName: profile?.displayName || user?.displayName || 'FinTrack User',
+                currency,
+                transactions,
+                savingsGoals,
+                budgets,
+                debtRecords,
+                bills,
+                recordPayments,
+                recurringTransactions,
+              })
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/50 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            ERP Full Pack (Excel)
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              exportErpFullReportToPDF({
+                ownerName: profile?.displayName || user?.displayName || 'FinTrack User',
+                currency,
+                transactions,
+                savingsGoals,
+                budgets,
+                debtRecords,
+                bills,
+                recordPayments,
+                recurringTransactions,
+              })
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            ERP Full Pack (PDF)
           </button>
         </div>
 
@@ -442,6 +914,12 @@ export function SettingsPage() {
           </div>
         )}
       </div>
+      <PinSetupModal
+        open={securityModalOpen}
+        ownerLabel={profile?.displayName || user?.displayName || user?.email || 'FinTrack Owner'}
+        onClose={() => setSecurityModalOpen(false)}
+        onUpdated={(next) => setSecurityConfig(next)}
+      />
     </div>
   );
 }

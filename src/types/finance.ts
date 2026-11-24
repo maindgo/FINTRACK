@@ -189,3 +189,50 @@ export interface RecurringTransaction {
 }
 
 export type DashboardDateFilter = 'today' | 'week' | 'month' | 'year' | 'custom';
+
+export type NotificationCategory =
+  | 'bills'
+  | 'budgets'
+  | 'debts'
+  | 'insights'
+  | 'savings'
+  | 'recurring';
+
+export type NotificationSeverity = 'critical' | 'warning' | 'info' | 'positive';
+
+export interface FinTrackNotification {
+  id: string;
+  signature: string;
+  category: NotificationCategory;
+  severity: NotificationSeverity;
+  title: string;
+  body: string;
+  actionSection: NavSection;
+  timestampLabel: string;
+}
+
+export interface NotificationCategoryPrefs {
+  bills: boolean;
+  budgets: boolean;
+  debts: boolean;
+  insights: boolean;
+  savings: boolean;
+  recurring: boolean;
+}
+
+export interface NotificationPrefs {
+  enabled: boolean;
+  pushToDeviceBar: boolean;
+  showTopAlertBanner: boolean;
+  categories: NotificationCategoryPrefs;
+  readSignatures: string[];
+  dismissedSignatures: string[];
+}
+
+export type BrowserNotificationPermission = 'granted' | 'denied' | 'default' | 'unsupported';
+
+export interface MaintenanceConfig {
+  enabled: boolean;
+  updatedAt?: Timestamp | null;
+}
+

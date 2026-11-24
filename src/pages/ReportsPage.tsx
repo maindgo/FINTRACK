@@ -15,21 +15,43 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Download } from 'lucide-react';
+import { Download, FileSpreadsheet, FileText } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { CHART_COLORS } from '../utils/constants';
 import {
   formatCurrency,
   formatCurrencyAscii,
   formatMonthLabel,
+  formatReadableDate,
   getCurrentMonthStr,
   getTodayStr,
 } from '../utils/formatters';
 import { aggregateByCategory, buildMonthlySeries } from '../utils/analytics';
 import {
+  buildArApSchedule,
+  buildBalanceSheetStatement,
+  buildFinancialStatsSnapshot,
+  buildGeneralLedgerRows,
+  buildTrialBalance,
+} from '../utils/erpAnalytics';
+import {
+  exportArApScheduleToExcel,
+  exportArApScheduleToPDF,
+  exportBalanceSheetToExcel,
+  exportBalanceSheetToPDF,
+  exportErpFullReportToPDF,
+  exportErpFullWorkbookToExcel,
+  exportFinancialStatsToExcel,
+  exportFinancialStatsToPDF,
+  exportGeneralLedgerToExcel,
+  exportGeneralLedgerToPDF,
   exportGenericReportToPDF,
+  exportProfitLossToExcel,
+  exportProfitLossToPDF,
   exportTransactionsToCSV,
   exportTransactionsToExcel,
+  exportTrialBalanceToExcel,
+  exportTrialBalanceToPDF,
 } from '../utils/exporters';
 
 type ReportTab =
@@ -38,6 +60,10 @@ type ReportTab =
   | 'income'
   | 'expense'
   | 'profit-loss'
+  | 'balance-sheet'
+  | 'general-ledger'
+  | 'trial-balance'
+  | 'ar-ap'
   | 'savings'
   | 'category-expense'
   | 'cash-flow';
@@ -45,16 +71,32 @@ type ReportTab =
 const REPORT_TABS: { id: ReportTab; label: string }[] = [
   { id: 'monthly', label: 'Monthly Financial' },
   { id: 'yearly', label: 'Yearly Financial' },
+  { id: 'profit-loss', label: 'Profit & Loss' },
+  { id: 'balance-sheet', label: 'Balance Sheet' },
+  { id: 'general-ledger', label: 'General Ledger' },
+  { id: 'trial-balance', label: 'Trial Balance' },
+  { id: 'ar-ap', label: 'AR / AP & Aging' },
+  { id: 'cash-flow', label: 'Cash Flow' },
   { id: 'income', label: 'Income Report' },
   { id: 'expense', label: 'Expense Report' },
-  { id: 'profit-loss', label: 'Profit / Loss' },
+  { id: 'category-expense', label: 'Category Expense' },
   { id: 'savings', label: 'Savings Report' },
-  { id: 'category-expense', label: 'Category-wise Expense' },
-  { id: 'cash-flow', label: 'Cash Flow' },
 ];
 
 export function ReportsPage() {
-  const { transactions, savingsGoals, currency } = useFinance();
+  const {
+    user,
+    profile,
+    transactions,
+    savingsGoals,
+    budgets,
+    debtRecords,
+    bills,
+    recordPayments,
+    recurringTransactions,
+    currency,
+  } = useFinance();
+
   const [activeTab, setActiveTab] = useState<ReportTab>('monthly');
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthStr());
   const [selectedYear, setSelectedYear] = useState(getTodayStr().slice(0, 4));
@@ -92,7 +134,7 @@ export function ReportsPage() {
   }, [scopedTransactions]);
 
   const yearlyBreakdown = useMemo(() => {
-    const months = Array.from({ length: 12 }, (_, idx) => {
+    return Array.from({ length: 12 }, (_, idx) => {
       const m = `${selectedYear}-${String(idx + 1).padStart(2, '0')}`;
       const label = new Date(Number(selectedYear), idx, 1).toLocaleDateString('en-IN', {
         month: 'short',
@@ -107,12 +149,35 @@ export function ReportsPage() {
       });
       return { month: m, label, income, expenses, profit: income - expenses };
     });
-    return months;
   }, [transactions, selectedYear]);
 
   const monthlySeries = useMemo(() => buildMonthlySeries(transactions, 12), [transactions]);
   const incomeCats = useMemo(() => aggregateByCategory(scopedTransactions, 'income'), [scopedTransactions]);
   const expenseCats = useMemo(() => aggregateByCategory(scopedTransactions, 'expense'), [scopedTransactions]);
+
+  const balanceSheet = useMemo(
+    () => buildBalanceSheetStatement(transactions, savingsGoals, debtRecords, bills),
+    [transactions, savingsGoals, debtRecords, bills]
+  );
+  const generalLedger = useMemo(() => buildGeneralLedgerRows(transactions), [transactions]);
+  const trialBalance = useMemo(() => buildTrialBalance(transactions), [transactions]);
+  const arApSchedule = useMemo(() => buildArApSchedule(debtRecords, bills), [debtRecords, bills]);
+  const statsSnapshot = useMemo(
+    () =>
+      buildFinancialStatsSnapshot({
+        periodLabel: 'All-Time & Current Positions',
+        periodStart: '0000-01-01',
+        periodEnd: '9999-12-31',
+        allTransactions: transactions,
+        savingsGoals,
+        budgets,
+        debtRecords,
+        bills,
+        recordPayments,
+        recurringTransactions,
+      }),
+    [transactions, savingsGoals, budgets, debtRecords, bills, recordPayments, recurringTransactions]
+  );
 
   const savingsChartData = useMemo(
     () =>
@@ -125,8 +190,65 @@ export function ReportsPage() {
     [savingsGoals]
   );
 
-  const handleExportPDF = () => {
-    const title = REPORT_TABS.find((t) => t.id === activeTab)?.label + ' Report';
+  const fullErpInput = {
+    ownerName: profile?.displayName || user?.displayName || 'FinTrack User',
+    currency,
+    transactions,
+    savingsGoals,
+    budgets,
+    debtRecords,
+    bills,
+    recordPayments,
+    recurringTransactions,
+  };
+
+  const handleExportActiveExcel = () => {
+    if (activeTab === 'balance-sheet') {
+      exportBalanceSheetToExcel(transactions, savingsGoals, debtRecords, bills, currency);
+      return;
+    }
+    if (activeTab === 'general-ledger') {
+      exportGeneralLedgerToExcel(transactions, currency);
+      return;
+    }
+    if (activeTab === 'trial-balance') {
+      exportTrialBalanceToExcel(transactions, currency);
+      return;
+    }
+    if (activeTab === 'ar-ap') {
+      exportArApScheduleToExcel(debtRecords, bills, currency);
+      return;
+    }
+    if (activeTab === 'profit-loss') {
+      exportProfitLossToExcel(transactions, currency);
+      return;
+    }
+    exportTransactionsToExcel(scopedTransactions, currency, `fintrack-${activeTab}`);
+  };
+
+  const handleExportActivePDF = () => {
+    if (activeTab === 'balance-sheet') {
+      exportBalanceSheetToPDF(transactions, savingsGoals, debtRecords, bills, currency);
+      return;
+    }
+    if (activeTab === 'general-ledger') {
+      exportGeneralLedgerToPDF(transactions, currency);
+      return;
+    }
+    if (activeTab === 'trial-balance') {
+      exportTrialBalanceToPDF(transactions, currency);
+      return;
+    }
+    if (activeTab === 'ar-ap') {
+      exportArApScheduleToPDF(debtRecords, bills, currency);
+      return;
+    }
+    if (activeTab === 'profit-loss') {
+      exportProfitLossToPDF(transactions, currency);
+      return;
+    }
+
+    const title = (REPORT_TABS.find((t) => t.id === activeTab)?.label || 'Financial') + ' Report';
     if (activeTab === 'savings') {
       const totalSaved = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
       const totalTarget = savingsGoals.reduce((s, g) => s + g.targetAmount, 0);
@@ -192,14 +314,14 @@ export function ReportsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Reports &amp; Analytics
+            Reports, Analytics &amp; ERP Statements
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Interactive financial reports built from your live transaction, budget, and savings data.
+            Interactive charts plus audit-ready General Ledger, Balance Sheet, Trial Balance, P&amp;L, and AR/AP schedules.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {activeTab === 'monthly' && (
             <input
               type="month"
@@ -224,26 +346,72 @@ export function ReportsPage() {
           <button
             type="button"
             onClick={() => exportTransactionsToCSV(scopedTransactions, currency, `fintrack-${activeTab}`)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
             CSV
           </button>
           <button
             type="button"
-            onClick={() => exportTransactionsToExcel(scopedTransactions, currency, `fintrack-${activeTab}`)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+            onClick={handleExportActiveExcel}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 whitespace-nowrap"
           >
-            <Download className="w-3.5 h-3.5" />
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             Excel
           </button>
           <button
             type="button"
-            onClick={handleExportPDF}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90"
+            onClick={handleExportActivePDF}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
             PDF
+          </button>
+        </div>
+      </div>
+
+      {/* ERP Statement & Financial Stats Export Center */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="space-y-0.5">
+          <div className="text-sm font-semibold text-slate-900 dark:text-white">
+            ERP Financial Export Suite
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Download complete multi-sheet Excel workbooks or multi-section PDF packages covering Financial Stats, P&amp;L, Balance Sheet, Trial Balance, General Ledger, Cash Flow, and AR/AP Aging.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => exportFinancialStatsToExcel(statsSnapshot, transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            Financial Stats (Excel)
+          </button>
+          <button
+            type="button"
+            onClick={() => exportFinancialStatsToPDF(statsSnapshot, transactions, currency)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap"
+          >
+            <FileText className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            Financial Stats (PDF)
+          </button>
+          <button
+            type="button"
+            onClick={() => exportErpFullWorkbookToExcel(fullErpInput)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 text-xs font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/50 whitespace-nowrap"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            Full ERP Pack (Excel)
+          </button>
+          <button
+            type="button"
+            onClick={() => exportErpFullReportToPDF(fullErpInput)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 whitespace-nowrap"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Full ERP Pack (PDF)
           </button>
         </div>
       </div>
@@ -352,7 +520,7 @@ export function ReportsPage() {
       )}
 
       {activeTab === 'profit-loss' && (
-        <ChartCard title="12-Month Net Profit & Loss" subtitle="Monthly surplus and deficit performance">
+        <ChartCard title="12-Month Net Profit & Loss" subtitle="Monthly surplus and deficit performance (use Excel/PDF buttons above for structured P&L Statement)">
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={monthlySeries}>
@@ -369,6 +537,260 @@ export function ReportsPage() {
             </ResponsiveContainer>
           </div>
         </ChartCard>
+      )}
+
+      {activeTab === 'balance-sheet' && (
+        <div className="space-y-6">
+          <div className="grid sm:grid-cols-3 gap-4">
+            <MetricBox label="Total Assets" value={formatCurrency(balanceSheet.totalAssets, currency)} tone="positive" />
+            <MetricBox label="Total Liabilities" value={formatCurrency(balanceSheet.totalLiabilities, currency)} tone={balanceSheet.totalLiabilities > 0 ? 'negative' : 'neutral'} />
+            <MetricBox label="Owner Net Worth (Equity)" value={formatCurrency(balanceSheet.netWorth, currency)} tone={balanceSheet.netWorth >= 0 ? 'positive' : 'negative'} />
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-6">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Assets</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">As of {formatReadableDate(balanceSheet.asOfDate)}</p>
+                </div>
+                <span className="text-xs font-mono tabular-nums font-bold text-emerald-600 dark:text-emerald-400">
+                  {formatCurrency(balanceSheet.totalAssets, currency)}
+                </span>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {balanceSheet.assets.map((item) => (
+                  <div key={item.code} className="px-5 py-3.5 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-900 dark:text-white">
+                        <span className="font-mono text-xs text-slate-400 mr-2">{item.code}</span>
+                        {item.label}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{item.group} · {item.note}</div>
+                    </div>
+                    <span className="font-mono tabular-nums font-semibold text-sm text-slate-900 dark:text-white whitespace-nowrap">
+                      {formatCurrency(item.amount, currency)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Liabilities &amp; Net Worth</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Assets = Liabilities + Net Worth</p>
+                </div>
+                <span className="text-xs font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                  {formatCurrency(balanceSheet.totalLiabilities + balanceSheet.netWorth, currency)}
+                </span>
+              </div>
+              <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                {balanceSheet.liabilities.map((item) => (
+                  <div key={item.code} className="px-5 py-3.5 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-slate-900 dark:text-white">
+                        <span className="font-mono text-xs text-slate-400 mr-2">{item.code}</span>
+                        {item.label}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{item.group} · {item.note}</div>
+                    </div>
+                    <span className="font-mono tabular-nums font-semibold text-sm text-red-600 dark:text-red-400 whitespace-nowrap">
+                      {formatCurrency(item.amount, currency)}
+                    </span>
+                  </div>
+                ))}
+                <div className="px-5 py-3.5 flex items-center justify-between gap-4 bg-slate-50/70 dark:bg-slate-950/40">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                      <span className="font-mono text-xs text-slate-400 mr-2">E-300</span>
+                      Owner Net Worth (Equity)
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">Total Assets minus Total Liabilities</div>
+                  </div>
+                  <span className={`font-mono tabular-nums font-bold text-sm whitespace-nowrap ${balanceSheet.netWorth >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {formatCurrency(balanceSheet.netWorth, currency)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'general-ledger' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                General Ledger (Chronological Running Balance)
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {generalLedger.length} posted journal vouchers with Debit, Credit, and Running Cash Balance
+              </p>
+            </div>
+          </div>
+          {generalLedger.length === 0 ? (
+            <div className="p-10 text-center text-xs text-slate-500 dark:text-slate-400">
+              No transactions recorded yet. Add income or expenses to populate the General Ledger.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
+                    <th className="py-3 px-4">Voucher</th>
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Account</th>
+                    <th className="py-3 px-4">Particulars</th>
+                    <th className="py-3 px-4">Method</th>
+                    <th className="py-3 px-4 text-right">Debit (Out)</th>
+                    <th className="py-3 px-4 text-right">Credit (In)</th>
+                    <th className="py-3 px-5 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-xs">
+                  {generalLedger.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-4 font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.voucherNo}</td>
+                      <td className="py-2.5 px-4 font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">{formatReadableDate(r.date)}</td>
+                      <td className="py-2.5 px-4 text-slate-700 dark:text-slate-200">{r.account}</td>
+                      <td className="py-2.5 px-4 font-medium text-slate-900 dark:text-white">{r.particulars}</td>
+                      <td className="py-2.5 px-4 text-slate-500 dark:text-slate-400">{r.paymentMethod}</td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-red-600 dark:text-red-400 whitespace-nowrap">
+                        {r.debit > 0 ? formatCurrency(r.debit, currency) : '—'}
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                        {r.credit > 0 ? formatCurrency(r.credit, currency) : '—'}
+                      </td>
+                      <td className="py-2.5 px-5 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                        {formatCurrency(r.runningBalance, currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'trial-balance' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Trial Balance
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Reconciliation across Cash Ledger, Income Accounts, and Expense Accounts
+              </p>
+            </div>
+            <span className={`text-xs font-semibold ${trialBalance.isBalanced ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+              {trialBalance.isBalanced ? 'Balanced (Debits = Credits)' : 'Variance'}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
+                  <th className="py-3 px-5">Code</th>
+                  <th className="py-3 px-4">Account Name</th>
+                  <th className="py-3 px-4">Group</th>
+                  <th className="py-3 px-4 text-right">Entries</th>
+                  <th className="py-3 px-4 text-right">Debit</th>
+                  <th className="py-3 px-5 text-right">Credit</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-xs">
+                {trialBalance.rows.map((r) => (
+                  <tr key={r.accountCode} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                    <td className="py-2.5 px-5 font-mono text-slate-500 dark:text-slate-400">{r.accountCode}</td>
+                    <td className="py-2.5 px-4 font-medium text-slate-900 dark:text-white">{r.accountName}</td>
+                    <td className="py-2.5 px-4 text-slate-500 dark:text-slate-400">{r.accountGroup}</td>
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300">{r.entryCount}</td>
+                    <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                      {r.debit > 0 ? formatCurrency(r.debit, currency) : '—'}
+                    </td>
+                    <td className="py-2.5 px-5 text-right font-mono tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                      {r.credit > 0 ? formatCurrency(r.credit, currency) : '—'}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-50 dark:bg-slate-950/60 font-semibold">
+                  <td className="py-3 px-5 font-mono text-slate-900 dark:text-white">TOTAL</td>
+                  <td className="py-3 px-4 text-slate-900 dark:text-white" colSpan={3}>
+                    General Ledger Totals
+                  </td>
+                  <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                    {formatCurrency(trialBalance.totalDebits, currency)}
+                  </td>
+                  <td className="py-3 px-5 text-right font-mono tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                    {formatCurrency(trialBalance.totalCredits, currency)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'ar-ap' && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Accounts Receivable, Payables, Loans &amp; Bills Aging Register
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {arApSchedule.length} tracked obligation and recovery records sorted by overdue aging
+            </p>
+          </div>
+          {arApSchedule.length === 0 ? (
+            <div className="p-10 text-center text-xs text-slate-500 dark:text-slate-400">
+              No loans, receivables, payables, or bills recorded yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-50/70 dark:bg-slate-950/40">
+                    <th className="py-3 px-4">Ref</th>
+                    <th className="py-3 px-4">Direction</th>
+                    <th className="py-3 px-4">Party / Provider</th>
+                    <th className="py-3 px-4">Title</th>
+                    <th className="py-3 px-4">Due Date</th>
+                    <th className="py-3 px-4 text-right">Total</th>
+                    <th className="py-3 px-4 text-right">Remaining</th>
+                    <th className="py-3 px-5">Aging Bucket</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 text-xs">
+                  {arApSchedule.map((r) => (
+                    <tr key={r.refCode} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-4 font-mono text-slate-500 dark:text-slate-400">{r.refCode}</td>
+                      <td className={`py-2.5 px-4 font-semibold ${r.direction === 'Receivable' ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                        {r.direction}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-700 dark:text-slate-200">{r.partyOrProvider}</td>
+                      <td className="py-2.5 px-4 font-medium text-slate-900 dark:text-white">{r.title}</td>
+                      <td className="py-2.5 px-4 font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">{formatReadableDate(r.dueDate)}</td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                        {formatCurrency(r.totalAmount, currency)}
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                        {formatCurrency(r.remainingAmount, currency)}
+                      </td>
+                      <td className={`py-2.5 px-5 whitespace-nowrap font-medium ${r.daysOverdue > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>
+                        {r.agingBucket}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {activeTab === 'savings' && (

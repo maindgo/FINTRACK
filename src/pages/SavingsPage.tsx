@@ -6,6 +6,7 @@ import { useFinance } from '../context/FinanceContext';
 import { SavingsContribution, SavingsGoal } from '../types/finance';
 import { FIELD_LIMITS, SAVINGS_CATEGORIES } from '../utils/constants';
 import { daysBetween, formatCurrency, formatReadableDate, getTodayStr } from '../utils/formatters';
+import { computeSavingsAndCashSummary } from '../utils/analytics';
 import {
   addSavingsDeposit,
   createSavingsGoal,
@@ -15,7 +16,7 @@ import {
 import { getGuestSavingsContributions, GUEST_EVENT } from '../services/guestStore';
 
 export function SavingsPage() {
-  const { user, isGuest, savingsGoals, transactions, currency } = useFinance();
+  const { user, isGuest, savingsGoals, transactions, debtRecords, currency } = useFinance();
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null);
   const [depositGoal, setDepositGoal] = useState<SavingsGoal | null>(null);
@@ -76,16 +77,19 @@ export function SavingsPage() {
     const saved = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
     const remaining = Math.max(0, target - saved);
     const completed = savingsGoals.filter((g) => g.status === 'completed').length;
-    const allIncome = transactions
-      .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
-    const allExpenses = transactions
-      .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
-    const cashReserve = Math.max(0, allIncome - allExpenses);
-    const totalSavingRightNow = cashReserve + saved;
-    return { target, saved, remaining, completed, cashReserve, totalSavingRightNow };
-  }, [savingsGoals, transactions]);
+    const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+    return {
+      target,
+      saved,
+      remaining,
+      completed,
+      cashReserve: cashSummary.currentBalance,
+      totalSavingRightNow: cashSummary.totalSavingRightNow,
+      debtPaidOut: cashSummary.debtPaidOut,
+      debtRecoveredIn: cashSummary.debtRecoveredIn,
+      netDebtCashImpact: cashSummary.netDebtCashImpact,
+    };
+  }, [savingsGoals, transactions, debtRecords]);
 
   const openCreateModal = () => {
     setEditingGoal(null);
@@ -182,16 +186,48 @@ export function SavingsPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="col-span-2 lg:col-span-1 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4">
-          <div className="text-xs font-medium text-emerald-800 dark:text-emerald-300">
+        <div
+          className={`col-span-2 lg:col-span-1 rounded-xl p-4 border ${
+            totals.totalSavingRightNow >= 0
+              ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+              : 'bg-red-50/70 dark:bg-red-950/30 border-red-200 dark:border-red-800'
+          }`}
+        >
+          <div
+            className={`text-xs font-medium ${
+              totals.totalSavingRightNow >= 0
+                ? 'text-emerald-800 dark:text-emerald-300'
+                : 'text-red-800 dark:text-red-300'
+            }`}
+          >
             Total Saving Right Now
           </div>
-          <div className="text-xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-300 mt-1">
+          <div
+            className={`text-xl font-bold font-mono tabular-nums mt-1 ${
+              totals.totalSavingRightNow >= 0
+                ? 'text-emerald-700 dark:text-emerald-300'
+                : 'text-red-700 dark:text-red-300'
+            }`}
+          >
             {formatCurrency(totals.totalSavingRightNow, currency)}
           </div>
-          <div className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 mt-0.5">
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
             Cash {formatCurrency(totals.cashReserve, currency)} + Goals {formatCurrency(totals.saved, currency)}
           </div>
+          {(totals.debtPaidOut > 0 || totals.debtRecoveredIn > 0) && (
+            <div className="text-[11px] font-mono mt-1 flex flex-wrap gap-x-2">
+              {totals.debtPaidOut > 0 && (
+                <span className="text-red-600 dark:text-red-400">
+                  Borrowed Paid −{formatCurrency(totals.debtPaidOut, currency)}
+                </span>
+              )}
+              {totals.debtRecoveredIn > 0 && (
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  Lent Received +{formatCurrency(totals.debtRecoveredIn, currency)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">Saved in Goals</div>
@@ -218,6 +254,39 @@ export function SavingsPage() {
           </div>
         </div>
       </div>
+
+      {(totals.debtPaidOut > 0 || totals.debtRecoveredIn > 0) && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+          <span className="text-slate-600 dark:text-slate-300">
+            <span className="font-semibold text-slate-900 dark:text-white">
+              Loans &amp; Debts Impact on Total Saving:
+            </span>{' '}
+            Repaying borrowed money decreases your saving, while receiving back money previously lent increases it.
+          </span>
+          <div className="flex flex-wrap items-center gap-3 font-mono tabular-nums shrink-0">
+            {totals.debtPaidOut > 0 && (
+              <span className="text-red-600 dark:text-red-400 font-semibold">
+                Paid Out: −{formatCurrency(totals.debtPaidOut, currency)}
+              </span>
+            )}
+            {totals.debtRecoveredIn > 0 && (
+              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                Received Back: +{formatCurrency(totals.debtRecoveredIn, currency)}
+              </span>
+            )}
+            <span
+              className={`font-bold ${
+                totals.netDebtCashImpact >= 0
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-red-600 dark:text-red-400'
+              }`}
+            >
+              Net: {totals.netDebtCashImpact >= 0 ? '+' : ''}
+              {formatCurrency(totals.netDebtCashImpact, currency)}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Goals Grid */}
       {savingsGoals.length === 0 ? (

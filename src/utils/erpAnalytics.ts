@@ -8,7 +8,12 @@ import {
   TransactionRecord,
 } from '../types/finance';
 import { daysBetween, getCurrentMonthStr, getTodayStr } from './formatters';
-import { aggregateByCategory, buildMonthlySeries, computeProfitLoss } from './analytics';
+import {
+  aggregateByCategory,
+  buildMonthlySeries,
+  computeProfitLoss,
+  computeSavingsAndCashSummary,
+} from './analytics';
 
 export interface GeneralLedgerRow {
   voucherNo: string;
@@ -194,9 +199,8 @@ export function buildBalanceSheetStatement(
   debtRecords: DebtRecord[],
   bills: BillRecord[]
 ): BalanceSheetStatement {
-  const allIncome = transactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const allExpenses = transactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const cashNet = Number((allIncome - allExpenses).toFixed(2));
+  const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+  const cashNet = Number(cashSummary.currentBalance.toFixed(2));
 
   const savingsTotal = Number(savingsGoals.reduce((s, g) => s + g.savedAmount, 0).toFixed(2));
 
@@ -248,7 +252,7 @@ export function buildBalanceSheetStatement(
       label: 'Cash & Net Ledger Balance',
       group: 'Current Assets',
       amount: cashNet >= 0 ? cashNet : 0,
-      note: 'All-time recorded income minus expenses',
+      note: 'All-time income minus expenses, plus lent recoveries minus debt repayments',
     },
     {
       code: 'A-102',
@@ -426,9 +430,10 @@ export function buildFinancialStatsSnapshot(params: {
   const periodExpenses = periodExpenseList.reduce((s, t) => s + t.amount, 0);
   const periodNetProfit = periodIncome - periodExpenses;
 
-  const allTimeIncome = allTransactions.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const allTimeExpenses = allTransactions.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  const currentCashBalance = allTimeIncome - allTimeExpenses;
+  const cashSummary = computeSavingsAndCashSummary(allTransactions, savingsGoals, debtRecords);
+  const allTimeIncome = cashSummary.allIncome;
+  const allTimeExpenses = cashSummary.allExpenses;
+  const currentCashBalance = cashSummary.currentBalance;
 
   const totalSavings = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
   const savingsTargetTotal = savingsGoals.reduce((s, g) => s + g.targetAmount, 0);

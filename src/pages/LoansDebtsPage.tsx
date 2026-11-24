@@ -1,8 +1,19 @@
 import React, { useMemo, useState } from 'react';
-import { Edit2, HandCoins, History, Plus, Trash2, X } from 'lucide-react';
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Edit2,
+  HandCoins,
+  History,
+  PiggyBank,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { DebtRecord, DebtRecordType, RecordStatus } from '../types/finance';
 import { FIELD_LIMITS, PAYMENT_METHODS } from '../utils/constants';
+import { computeSavingsAndCashSummary } from '../utils/analytics';
 import { formatCurrency, formatReadableDate, getTodayStr } from '../utils/formatters';
 import {
   createDebtRecord,
@@ -27,12 +38,18 @@ const STATUS_LABELS: Record<RecordStatus, string> = {
 };
 
 export function LoansDebtsPage() {
-  const { user, debtRecords, recordPayments, currency } = useFinance();
+  const { user, debtRecords, recordPayments, transactions, savingsGoals, currency } = useFinance();
   const [filterType, setFilterType] = useState<'all' | DebtRecordType>('all');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<DebtRecord | null>(null);
   const [payingRecord, setPayingRecord] = useState<DebtRecord | null>(null);
   const [historyRecord, setHistoryRecord] = useState<DebtRecord | null>(null);
+  const [lastImpactNotice, setLastImpactNotice] = useState<{
+    direction: 'increase' | 'decrease';
+    amount: number;
+    partyName: string;
+    newTotalSaving: number;
+  } | null>(null);
 
   // Record Form
   const [recordType, setRecordType] = useState<DebtRecordType>('lent');
@@ -78,6 +95,11 @@ export function LoansDebtsPage() {
 
     return { totalReceivable, totalPayable, overdueCount };
   }, [debtRecords, today]);
+
+  const savingsSummary = useMemo(
+    () => computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords),
+    [transactions, savingsGoals, debtRecords]
+  );
 
   const openCreate = () => {
     setEditing(null);
@@ -149,9 +171,23 @@ export function LoansDebtsPage() {
     if (!user || !payingRecord) return;
     const amt = Number(payAmount);
     if (!Number.isFinite(amt) || amt <= 0) return;
+    const remaining = Math.max(0, Number((payingRecord.totalAmount - payingRecord.paidAmount).toFixed(2)));
+    const effectiveAmt = Math.min(amt, remaining > 0 ? remaining : amt);
+    const isReceivable =
+      payingRecord.recordType === 'lent' || payingRecord.recordType === 'receivable';
+    const projectedSaving = isReceivable
+      ? savingsSummary.totalSavingRightNow + effectiveAmt
+      : savingsSummary.totalSavingRightNow - effectiveAmt;
+
     setSaving(true);
     try {
       await recordDebtPayment(user.uid, payingRecord, amt, payDate, payMethod, payNote);
+      setLastImpactNotice({
+        direction: isReceivable ? 'increase' : 'decrease',
+        amount: effectiveAmt,
+        partyName: payingRecord.partyName,
+        newTotalSaving: projectedSaving,
+      });
       setPayingRecord(null);
       setPayAmount('');
       setPayNote('');
@@ -192,12 +228,59 @@ export function LoansDebtsPage() {
         </button>
       </div>
 
+      {/* Post-Payment Total Saving Impact Confirmation */}
+      {lastImpactNotice && (
+        <div
+          className={`rounded-xl border px-4 py-3 flex items-center justify-between gap-3 text-xs ${
+            lastImpactNotice.direction === 'increase'
+              ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+              : 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {lastImpactNotice.direction === 'increase' ? (
+              <ArrowDownLeft className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            ) : (
+              <ArrowUpRight className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
+            )}
+            <span>
+              {lastImpactNotice.direction === 'increase' ? (
+                <>
+                  Received <span className="font-mono font-semibold">{formatCurrency(lastImpactNotice.amount, currency)}</span> from{' '}
+                  <span className="font-semibold">{lastImpactNotice.partyName}</span> — Total Saving{' '}
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-300">increased</span> to{' '}
+                  <span className="font-mono font-bold">{formatCurrency(lastImpactNotice.newTotalSaving, currency)}</span>.
+                </>
+              ) : (
+                <>
+                  Paid <span className="font-mono font-semibold">{formatCurrency(lastImpactNotice.amount, currency)}</span> to{' '}
+                  <span className="font-semibold">{lastImpactNotice.partyName}</span> — Total Saving{' '}
+                  <span className="font-semibold text-red-700 dark:text-red-300">decreased</span> to{' '}
+                  <span className="font-mono font-bold">{formatCurrency(lastImpactNotice.newTotalSaving, currency)}</span>.
+                </>
+              )}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLastImpactNotice(null)}
+            aria-label="Dismiss notice"
+            className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 shrink-0"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">Pending Receivables / Lent</div>
           <div className="text-xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
             {formatCurrency(summary.totalReceivable, currency)}
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+            Received back: +{formatCurrency(savingsSummary.debtRecoveredIn, currency)}
           </div>
         </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
@@ -205,11 +288,45 @@ export function LoansDebtsPage() {
           <div className="text-xl font-bold font-mono tabular-nums text-red-600 dark:text-red-400 mt-1">
             {formatCurrency(summary.totalPayable, currency)}
           </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+            Paid back: −{formatCurrency(savingsSummary.debtPaidOut, currency)}
+          </div>
         </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
           <div className="text-xs text-slate-500 dark:text-slate-400">Overdue Items</div>
           <div className="text-xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400 mt-1">
             {summary.overdueCount}
+          </div>
+          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            Past due date &amp; unpaid
+          </div>
+        </div>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-xs text-slate-500 dark:text-slate-400">Total Saving Right Now</span>
+            <PiggyBank className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+          </div>
+          <div
+            className={`text-xl font-bold font-mono tabular-nums mt-1 ${
+              savingsSummary.totalSavingRightNow >= 0
+                ? 'text-blue-600 dark:text-blue-400'
+                : 'text-red-600 dark:text-red-400'
+            }`}
+          >
+            {formatCurrency(savingsSummary.totalSavingRightNow, currency)}
+          </div>
+          <div className="text-[11px] font-mono mt-1">
+            <span className="text-slate-500 dark:text-slate-400">Net debt impact: </span>
+            <span
+              className={
+                savingsSummary.netDebtCashImpact >= 0
+                  ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                  : 'text-red-600 dark:text-red-400 font-semibold'
+              }
+            >
+              {savingsSummary.netDebtCashImpact >= 0 ? '+' : ''}
+              {formatCurrency(savingsSummary.netDebtCashImpact, currency)}
+            </span>
           </div>
         </div>
       </div>
@@ -321,7 +438,9 @@ export function LoansDebtsPage() {
                               }}
                               className="px-2.5 py-1 rounded bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
                             >
-                              Record Payment
+                              {rec.recordType === 'lent' || rec.recordType === 'receivable'
+                                ? 'Record Receipt'
+                                : 'Record Payment'}
                             </button>
                           )}
                           <button
@@ -500,95 +619,149 @@ export function LoansDebtsPage() {
       )}
 
       {/* Payment Modal */}
-      {payingRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
-          <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl">
-            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
-                Payment · {payingRecord.partyName}
-              </h3>
-              <button type="button" onClick={() => setPayingRecord(null)} className="p-1 text-slate-400">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <form onSubmit={handlePayment} className="p-5 space-y-4">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Amount *
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max={Math.max(0.01, payingRecord.totalAmount - payingRecord.paidAmount)}
-                  required
-                  value={payAmount}
-                  onChange={(e) => setPayAmount(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
-                />
+      {payingRecord && (() => {
+        const isReceivable =
+          payingRecord.recordType === 'lent' || payingRecord.recordType === 'receivable';
+        const parsedAmt = Math.max(0, Number(payAmount) || 0);
+        const projectedSaving = isReceivable
+          ? savingsSummary.totalSavingRightNow + parsedAmt
+          : savingsSummary.totalSavingRightNow - parsedAmt;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+            <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
+                  {isReceivable ? 'Receive Repayment' : 'Pay Borrowed Amount'} · {payingRecord.partyName}
+                </h3>
+                <button type="button" onClick={() => setPayingRecord(null)} className="p-1 text-slate-400">
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <form onSubmit={handlePayment} className="p-5 space-y-4">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Date *
+                    {isReceivable ? 'Amount Received *' : 'Amount Paid *'}
                   </label>
                   <input
-                    type="date"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max={Math.max(0.01, payingRecord.totalAmount - payingRecord.paidAmount)}
                     required
-                    value={payDate}
-                    onChange={(e) => setPayDate(e.target.value)}
+                    value={payAmount}
+                    onChange={(e) => setPayAmount(e.target.value)}
                     className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
                   />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                      Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={payDate}
+                      onChange={(e) => setPayDate(e.target.value)}
+                      className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                      Method
+                    </label>
+                    <select
+                      value={payMethod}
+                      onChange={(e) => setPayMethod(e.target.value)}
+                      className="w-full px-3 py-2 text-sm rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+                    >
+                      {PAYMENT_METHODS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
                 <div className="space-y-1.5">
                   <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Method
+                    Reference / Note
                   </label>
-                  <select
-                    value={payMethod}
-                    onChange={(e) => setPayMethod(e.target.value)}
+                  <input
+                    type="text"
+                    maxLength={FIELD_LIMITS.SHORT_NOTE_MAX}
+                    value={payNote}
+                    onChange={(e) => setPayNote(e.target.value)}
                     className="w-full px-3 py-2 text-sm rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
-                  >
-                    {PAYMENT_METHODS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Reference / Note
-                </label>
-                <input
-                  type="text"
-                  maxLength={FIELD_LIMITS.SHORT_NOTE_MAX}
-                  value={payNote}
-                  onChange={(e) => setPayNote(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPayingRecord(null)}
-                  className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium"
+
+                {/* Live Impact on Total Saving Preview */}
+                <div
+                  className={`rounded-lg border p-3 text-xs space-y-1.5 ${
+                    isReceivable
+                      ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+                      : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+                  }`}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
-                >
-                  {saving ? 'Recording...' : 'Confirm Payment'}
-                </button>
-              </div>
-            </form>
+                  <div className="font-semibold text-slate-800 dark:text-slate-200">
+                    Impact on Total Saving
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600 dark:text-slate-300">
+                    <span>Current Total Saving</span>
+                    <span className="font-mono tabular-nums">
+                      {formatCurrency(savingsSummary.totalSavingRightNow, currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600 dark:text-slate-300">
+                      {isReceivable ? 'Amount Received (+)' : 'Borrowed Paid Out (−)'}
+                    </span>
+                    <span
+                      className={`font-mono tabular-nums font-semibold ${
+                        isReceivable
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {isReceivable ? '+' : '−'}
+                      {formatCurrency(parsedAmt, currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1.5 border-t border-slate-200/80 dark:border-slate-700/80 font-semibold text-slate-900 dark:text-white">
+                    <span>Total Saving After Entry</span>
+                    <span className="font-mono tabular-nums">
+                      {formatCurrency(projectedSaving, currency)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPayingRecord(null)}
+                    className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold"
+                  >
+                    {saving
+                      ? 'Recording...'
+                      : isReceivable
+                      ? 'Confirm Receipt'
+                      : 'Confirm Payment'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* History Modal */}
       {historyRecord && (

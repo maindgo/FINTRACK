@@ -713,3 +713,62 @@ export function computeMonthlyExpenseForecast(
     methodologyNote,
   };
 }
+
+export interface SavingsAndCashSummary {
+  allIncome: number;
+  allExpenses: number;
+  baseCashBalance: number;
+  debtRecoveredIn: number;
+  debtPaidOut: number;
+  netDebtCashImpact: number;
+  currentBalance: number;
+  goalSavings: number;
+  totalSavingRightNow: number;
+}
+
+export function computeSavingsAndCashSummary(
+  transactions: TransactionRecord[],
+  savingsGoals: SavingsGoal[],
+  debtRecords: DebtRecord[]
+): SavingsAndCashSummary {
+  const allIncome = transactions
+    .filter((t) => t.type === 'income')
+    .reduce((s, t) => s + t.amount, 0);
+  const allExpenses = transactions
+    .filter((t) => t.type === 'expense')
+    .reduce((s, t) => s + t.amount, 0);
+  const baseCashBalance = allIncome - allExpenses;
+
+  // Receiving back money previously lent/receivable increases available cash & total saving
+  const debtRecoveredIn = debtRecords
+    .filter((d) => d.recordType === 'lent' || d.recordType === 'receivable')
+    .reduce((s, d) => s + Math.max(0, d.paidAmount), 0);
+
+  // Paying back borrowed money, loans, or payables decreases available cash & total saving
+  const debtPaidOut = debtRecords
+    .filter(
+      (d) =>
+        d.recordType === 'borrowed' ||
+        d.recordType === 'payable' ||
+        d.recordType === 'loan'
+    )
+    .reduce((s, d) => s + Math.max(0, d.paidAmount), 0);
+
+  const netDebtCashImpact = debtRecoveredIn - debtPaidOut;
+  const currentBalance = baseCashBalance + netDebtCashImpact;
+  const goalSavings = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
+  const totalSavingRightNow = currentBalance + goalSavings;
+
+  return {
+    allIncome,
+    allExpenses,
+    baseCashBalance,
+    debtRecoveredIn,
+    debtPaidOut,
+    netDebtCashImpact,
+    currentBalance,
+    goalSavings,
+    totalSavingRightNow,
+  };
+}
+

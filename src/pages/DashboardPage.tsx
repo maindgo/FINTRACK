@@ -41,6 +41,7 @@ import {
   buildMonthlySeries,
   buildMonthSpendingComparison,
   computeMonthlyExpenseForecast,
+  computeSavingsAndCashSummary,
 } from '../utils/analytics';
 import { buildFinancialStatsSnapshot } from '../utils/erpAnalytics';
 import { exportFinancialStatsToExcel, exportFinancialStatsToPDF } from '../utils/exporters';
@@ -90,16 +91,15 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
       .reduce((s, t) => s + t.amount, 0);
     const netProfit = totalIncome - totalExpenses;
 
-    const allIncome = transactions
-      .filter((t) => t.type === 'income')
-      .reduce((s, t) => s + t.amount, 0);
-    const allExpenses = transactions
-      .filter((t) => t.type === 'expense')
-      .reduce((s, t) => s + t.amount, 0);
-    const currentBalance = allIncome - allExpenses;
-
-    const goalSavings = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
-    const totalSavingRightNow = Math.max(0, currentBalance) + goalSavings;
+    const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+    const {
+      currentBalance,
+      goalSavings,
+      totalSavingRightNow,
+      debtPaidOut,
+      debtRecoveredIn,
+      netDebtCashImpact,
+    } = cashSummary;
 
     const pendingBills = bills
       .filter((b) => b.status !== 'paid')
@@ -152,6 +152,9 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
       currentBalance,
       goalSavings,
       totalSavingRightNow,
+      debtPaidOut,
+      debtRecoveredIn,
+      netDebtCashImpact,
       pendingPayments,
       totalMoneyReceived,
       totalMoneySpent,
@@ -322,15 +325,49 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
         <SummaryCard
           label="Current Balance"
           value={formatCurrency(metrics.currentBalance, currency)}
-          subtext="All-time cumulative net"
+          subtext={
+            metrics.debtPaidOut > 0 || metrics.debtRecoveredIn > 0
+              ? 'Income − Expenses ± Debt settlements'
+              : 'All-time cumulative net'
+          }
+          extraSubtext={
+            metrics.debtPaidOut > 0 || metrics.debtRecoveredIn > 0 ? (
+              <span
+                className={`font-mono ${
+                  metrics.netDebtCashImpact >= 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                Debt impact: {metrics.netDebtCashImpact >= 0 ? '+' : ''}
+                {formatCurrency(metrics.netDebtCashImpact, currency)}
+              </span>
+            ) : undefined
+          }
           tone={metrics.currentBalance >= 0 ? 'neutral' : 'negative'}
           icon={Wallet}
         />
         <SummaryCard
           label="Total Saving Right Now"
           value={formatCurrency(metrics.totalSavingRightNow, currency)}
-          subtext={`Cash ${formatCurrency(Math.max(0, metrics.currentBalance), currency)} + Goals ${formatCurrency(metrics.goalSavings, currency)}`}
-          tone="blue"
+          subtext={`Cash ${formatCurrency(metrics.currentBalance, currency)} + Goals ${formatCurrency(metrics.goalSavings, currency)}`}
+          extraSubtext={
+            metrics.debtPaidOut > 0 || metrics.debtRecoveredIn > 0 ? (
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] font-mono">
+                {metrics.debtPaidOut > 0 && (
+                  <span className="text-red-600 dark:text-red-400">
+                    Borrowed Paid −{formatCurrency(metrics.debtPaidOut, currency)}
+                  </span>
+                )}
+                {metrics.debtRecoveredIn > 0 && (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    Lent Received +{formatCurrency(metrics.debtRecoveredIn, currency)}
+                  </span>
+                )}
+              </div>
+            ) : undefined
+          }
+          tone={metrics.totalSavingRightNow >= 0 ? 'blue' : 'negative'}
           icon={PiggyBank}
         />
         <SummaryCard
@@ -826,11 +863,12 @@ interface SummaryCardProps {
   label: string;
   value: string;
   subtext: string;
+  extraSubtext?: React.ReactNode;
   tone: 'positive' | 'negative' | 'warning' | 'blue' | 'neutral';
   icon: React.ComponentType<{ className?: string }>;
 }
 
-function SummaryCard({ label, value, subtext, tone, icon: Icon }: SummaryCardProps) {
+function SummaryCard({ label, value, subtext, extraSubtext, tone, icon: Icon }: SummaryCardProps) {
   const toneClasses = {
     positive: 'text-emerald-600 dark:text-emerald-400',
     negative: 'text-red-600 dark:text-red-400',
@@ -850,6 +888,7 @@ function SummaryCard({ label, value, subtext, tone, icon: Icon }: SummaryCardPro
           {value}
         </div>
         <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{subtext}</div>
+        {extraSubtext && <div className="text-[11px] mt-1">{extraSubtext}</div>}
       </div>
     </div>
   );

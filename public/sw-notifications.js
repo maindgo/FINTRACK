@@ -1,12 +1,4 @@
-/* FinTrack Service Worker for Mobile & Desktop Notification Bar */
-
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
-});
+/* FinTrack Notification Click Handler (imported by PWA Service Worker) */
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

@@ -28,7 +28,6 @@ import {
   Sun,
   Target,
   TrendingUp,
-  Wallet,
   Wrench,
   X,
 } from 'lucide-react';
@@ -37,6 +36,8 @@ import { useFinance } from '../context/FinanceContext';
 import { FinTrackNotification, NavSection } from '../types/finance';
 import { NAV_ITEMS } from '../utils/constants';
 import { isRunningInIframe } from '../services/notificationService';
+import { BrandLogo } from './BrandLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 const NAV_ICONS: Record<NavSection, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
@@ -167,9 +168,7 @@ export function LayoutShell({
       {/* Brand Header */}
       <div className="h-16 px-5 flex items-center justify-between border-b border-slate-800 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shrink-0">
-            <Wallet className="w-4 h-4" />
-          </div>
+          <BrandLogo size="xs" />
           <span className="text-base font-bold tracking-tight text-white whitespace-nowrap">
             FinTrack
           </span>
@@ -290,6 +289,7 @@ export function LayoutShell({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <PWAInstallButton />
             <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
               <CreditCard className="w-3.5 h-3.5" />
               {currency}

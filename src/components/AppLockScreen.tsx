@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Delete, Fingerprint, Lock, RotateCcw, ShieldCheck, Wallet } from 'lucide-react';
+import { Delete, Fingerprint, Lock, RotateCcw, ShieldCheck } from 'lucide-react';
+import { BrandLogo } from './BrandLogo';
 import {
   SecurityLockConfig,
   verifyBiometricLock,
@@ -141,8 +142,8 @@ export function AppLockScreen({
       <div className="w-full max-w-sm bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl p-6 sm:p-7 space-y-6">
         {/* Brand & Lock Header */}
         <div className="text-center space-y-2.5">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center mx-auto relative">
-            <Wallet className="w-6 h-6" />
+          <div className="w-14 h-14 mx-auto relative">
+            <BrandLogo size="lg" />
             <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-slate-900 dark:bg-slate-800 border-2 border-white dark:border-slate-900 flex items-center justify-center">
               <Lock className="w-2.5 h-2.5 text-emerald-400" />
             </span>

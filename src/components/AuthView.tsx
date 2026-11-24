@@ -20,11 +20,12 @@ import {
   RefreshCw,
   ShieldCheck,
   User as UserIcon,
-  Wallet,
 } from 'lucide-react';
 import { auth, FIREBASE_PROJECT_ID, googleProvider } from '../firebase';
 import { useFinance } from '../context/FinanceContext';
+import { BrandLogo } from './BrandLogo';
 import { PinSetupModal } from './PinSetupModal';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   isAppSecurityConfigured,
   loadSecurityConfig,
@@ -231,10 +232,11 @@ export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/55 to-slate-950/35" />
 
         <div className="relative z-10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white">
-            <Wallet className="w-5 h-5" />
+          <BrandLogo size="md" />
+          <div>
+            <span className="text-xl font-bold tracking-tight block leading-none">FinTrack</span>
+            <span className="text-xs text-emerald-400 font-medium">Growth Yourself with FinTrack</span>
           </div>
-          <span className="text-xl font-bold tracking-tight">FinTrack</span>
         </div>
 
         <div className="relative z-10 max-w-lg space-y-6">
@@ -264,13 +266,19 @@ export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
       {/* Right Authentication Form */}
       <div className="flex items-center justify-center p-6 sm:p-10">
         <div className="w-full max-w-md space-y-7">
-          <div className="lg:hidden flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-slate-900 dark:bg-emerald-600 flex items-center justify-center text-white">
-              <Wallet className="w-5 h-5" />
+          <div className="lg:hidden flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5">
+              <BrandLogo size="sm" />
+              <div>
+                <span className="text-base font-bold text-slate-900 dark:text-white block leading-none">
+                  FinTrack
+                </span>
+                <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                  Growth Yourself with FinTrack
+                </span>
+              </div>
             </div>
-            <span className="text-lg font-bold text-slate-900 dark:text-white">
-              FinTrack – Smart Money Manager
-            </span>
+            <PWAInstallButton />
           </div>
 
           {onBackToMaintenance && (

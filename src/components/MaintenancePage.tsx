@@ -14,11 +14,11 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
-  Wallet,
   Wrench,
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { useFinance } from '../context/FinanceContext';
+import { BrandLogo } from './BrandLogo';
 import {
   MAINTENANCE_BANNER_TEXT,
   MAINTENANCE_UPDATE_ITEMS,
@@ -125,15 +125,13 @@ export function MaintenancePage({
       {/* Top Brand Bar */}
       <header className="w-full max-w-5xl mx-auto px-4 sm:px-6 pt-6 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-xs">
-            <Wallet className="w-5 h-5" />
-          </div>
+          <BrandLogo size="sm" />
           <div>
             <div className="text-base font-bold tracking-tight text-slate-900 dark:text-white leading-none">
               FinTrack
             </div>
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-              Smart Money Manager
+            <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
+              Growth Yourself with FinTrack
             </div>
           </div>
         </div>

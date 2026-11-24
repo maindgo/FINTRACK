@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { signOut } from 'firebase/auth';
-import { Wallet } from 'lucide-react';
 import { auth } from './firebase';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FinanceProvider, useFinance } from './context/FinanceContext';
@@ -8,6 +7,8 @@ import { AppLockScreen } from './components/AppLockScreen';
 import { AuthView } from './components/AuthView';
 import { LayoutShell } from './components/LayoutShell';
 import { MaintenancePage } from './components/MaintenancePage';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { SplashLoadingScreen } from './components/SplashLoadingScreen';
 import { TransactionModal } from './components/TransactionModal';
 import { ReceiptPreviewModal } from './components/ReceiptPreviewModal';
 import { DashboardPage } from './pages/DashboardPage';
@@ -38,12 +39,15 @@ function FinTrackWorkspace() {
     user,
     firebaseUser,
     authReady,
+    dataLoading,
     isGuest,
     exitGuestMode,
     isAdmin,
     maintenanceEnabled,
     maintenanceLoading,
   } = useFinance();
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  const [maxWaitElapsed, setMaxWaitElapsed] = useState(false);
   const [showAdminSignIn, setShowAdminSignIn] = useState(false);
   const [adminBypassMaintenance, setAdminBypassMaintenance] = useState(false);
   const prevMaintenanceRef = useRef(maintenanceEnabled);
@@ -137,21 +141,35 @@ function FinTrackWorkspace() {
   }, [maintenanceEnabled]);
 
   useEffect(() => {
+    const minTimer = setTimeout(() => setMinSplashElapsed(true), 1600);
+    const maxTimer = setTimeout(() => setMaxWaitElapsed(true), 3200);
+    return () => {
+      clearTimeout(minTimer);
+      clearTimeout(maxTimer);
+    };
+  }, []);
+
+  useEffect(() => {
     if (isAdmin) {
       setShowAdminSignIn(false);
     }
   }, [isAdmin]);
 
-  if (!authReady || maintenanceLoading) {
+  const isSignedInVerified = Boolean(user && (isGuest || user.emailVerified));
+  const waitingForInitialData =
+    isSignedInVerified && !isAppLocked && dataLoading && !maxWaitElapsed;
+
+  if (!authReady || maintenanceLoading || !minSplashElapsed || waitingForInitialData) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 gap-3">
-        <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white">
-          <Wallet className="w-5 h-5" />
-        </div>
-        <div className="text-sm font-medium text-slate-600 dark:text-slate-400">
-          Loading FinTrack...
-        </div>
-      </div>
+      <SplashLoadingScreen
+        statusLabel={
+          !authReady || maintenanceLoading
+            ? 'Loading FinTrack...'
+            : waitingForInitialData
+            ? 'Syncing your dashboard...'
+            : 'Growth Yourself with FinTrack'
+        }
+      />
     );
   }
 
@@ -263,6 +281,7 @@ function FinTrackWorkspace() {
         record={receiptRecord}
         onClose={() => setReceiptRecord(null)}
       />
+      <OfflineIndicator />
     </LayoutShell>
   );
 }

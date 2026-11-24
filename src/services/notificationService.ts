@@ -97,8 +97,8 @@ export async function registerNotificationServiceWorker(): Promise<ServiceWorker
   }
   if (!swRegistrationPromise) {
     swRegistrationPromise = navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
-      .then((reg) => reg)
+      .getRegistration('/')
+      .then((existing) => existing || navigator.serviceWorker.ready)
       .catch(() => null);
   }
   return swRegistrationPromise;
@@ -144,8 +144,8 @@ export async function showSystemBarNotification(
   const options: NotificationOptions & { renotify?: boolean; vibrate?: number[] } = {
     body,
     tag,
-    icon: '/icon.svg',
-    badge: '/icon.svg',
+    icon: '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
     renotify: false,
     data: { section },
   };

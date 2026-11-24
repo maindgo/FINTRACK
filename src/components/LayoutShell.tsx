@@ -25,6 +25,7 @@ import {
   PiggyBank,
   Plus,
   Settings,
+  Sparkles,
   Sun,
   Target,
   TrendingUp,
@@ -51,6 +52,7 @@ const NAV_ICONS: Record<NavSection, React.ComponentType<{ className?: string }>>
   'bills-emis': CalendarClock,
   reports: BarChart3,
   insights: Lightbulb,
+  'ai-insights': Sparkles,
   settings: Settings,
 };
 

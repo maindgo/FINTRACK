@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const APP_LOGO_SRC = '/assets/aistudio/Picsart_26-11-23_22-03-18-641_9ee05f42.png';
+export const APP_LOGO_SRC = '/fintrack-icon-512.png';
 
 interface BrandLogoProps {
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';

@@ -78,6 +78,7 @@ export const NAV_ITEMS: { id: NavSection; label: string }[] = [
   { id: 'bills-emis', label: 'Bills & EMIs' },
   { id: 'reports', label: 'Reports & Analytics' },
   { id: 'insights', label: 'Financial Insights' },
+  { id: 'ai-insights', label: 'AI Insights' },
   { id: 'settings', label: 'Settings' },
 ];
 

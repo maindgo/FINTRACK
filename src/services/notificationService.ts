@@ -144,8 +144,8 @@ export async function showSystemBarNotification(
   const options: NotificationOptions & { renotify?: boolean; vibrate?: number[] } = {
     body,
     tag,
-    icon: '/pwa-192x192.png',
-    badge: '/pwa-192x192.png',
+    icon: '/fintrack-icon-192.png',
+    badge: '/fintrack-icon-192.png',
     renotify: false,
     data: { section },
   };

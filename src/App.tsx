@@ -21,6 +21,7 @@ import { LoansDebtsPage } from './pages/LoansDebtsPage';
 import { BillsEmisPage } from './pages/BillsEmisPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { InsightsPage } from './pages/InsightsPage';
+import { AIInsightsPage } from './pages/AIInsightsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import {
   clearSecurityConfig,
@@ -264,6 +265,7 @@ function FinTrackWorkspace() {
       {activeSection === 'bills-emis' && <BillsEmisPage />}
       {activeSection === 'reports' && <ReportsPage />}
       {activeSection === 'insights' && <InsightsPage />}
+      {activeSection === 'ai-insights' && <AIInsightsPage />}
       {activeSection === 'settings' && <SettingsPage />}
 
       <TransactionModal

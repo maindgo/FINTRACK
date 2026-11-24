@@ -15,6 +15,7 @@ export type NavSection =
   | 'bills-emis'
   | 'reports'
   | 'insights'
+  | 'ai-insights'
   | 'settings';
 
 export type IncomeCategory =
@@ -236,3 +237,128 @@ export interface MaintenanceConfig {
   updatedAt?: Timestamp | null;
 }
 
+export interface SanitizedFinancialSnapshot {
+  currencyLabel: string;
+  currentMonthLabel: string;
+  previousMonthLabel: string;
+  transactionCount: number;
+  currentMonthTransactionCount: number;
+  previousMonthTransactionCount: number;
+  monthlySummary: {
+    income: number;
+    expenses: number;
+    savings: number;
+    savingsRatePct: number | null;
+    prevIncome: number;
+    prevExpenses: number;
+    prevSavings: number;
+    incomeGrowthPct: number | null;
+    expenseGrowthPct: number | null;
+    monthlyBudgetLimit: number;
+  };
+  categoryBreakdown: {
+    category: string;
+    currentMonth: number;
+    previousMonth: number;
+    allTimeTotal: number;
+    sharePct: number;
+    changePct: number | null;
+    txCount: number;
+  }[];
+  monthlyTrend: {
+    monthLabel: string;
+    income: number;
+    expenses: number;
+    savings: number;
+  }[];
+  unusualTransactions: {
+    category: string;
+    amount: number;
+    date: string;
+    multipleOfAverage: number;
+  }[];
+  budgets: {
+    category: string;
+    limitAmount: number;
+    spentAmount: number;
+    utilizationPct: number;
+    alertThreshold: number;
+  }[];
+  savingsGoals: {
+    label: string;
+    category: string;
+    targetAmount: number;
+    savedAmount: number;
+    remainingAmount: number;
+    targetDate: string;
+    status: string;
+  }[];
+  commitments: {
+    monthlyBillsAndEmis: number;
+    activeRecurringExpenseMonthly: number;
+    overdueBillsCount: number;
+  };
+}
+
+export interface GeminiAIInsightsResult {
+  financial_summary: {
+    overview: string;
+    monthly_income_inr: number;
+    monthly_expenses_inr: number;
+    total_savings_inr: number;
+    savings_rate_pct: number;
+    previous_month_comparison: string;
+    data_availability_note: string;
+  };
+  spending_analysis: {
+    narrative: string;
+    top_categories: {
+      category: string;
+      amount_inr: number;
+      share_pct: number;
+      previous_month_inr: number;
+      trend_note: string;
+    }[];
+  };
+  unusual_spending: {
+    summary: string;
+    alerts: {
+      category: string;
+      amount_inr: number;
+      reason: string;
+      severity: 'info' | 'warning' | 'critical' | string;
+    }[];
+  };
+  savings_suggestions: {
+    title: string;
+    action_step: string;
+    potential_monthly_saving_inr: number;
+    priority: 'high' | 'medium' | 'low' | string;
+  }[];
+  budget_recommendations: {
+    category: string;
+    current_budget_inr: number;
+    recommended_budget_inr: number;
+    rationale: string;
+  }[];
+  savings_predictions: {
+    summary: string;
+    disclaimer: string;
+    goals: {
+      goal_name: string;
+      target_amount_inr: number;
+      saved_amount_inr: number;
+      estimated_months_to_goal: number;
+      estimated_completion_label: string;
+      monthly_saving_needed_inr: number;
+      status_note: string;
+    }[];
+  };
+}
+
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}

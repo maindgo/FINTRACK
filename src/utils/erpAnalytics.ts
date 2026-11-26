@@ -197,9 +197,17 @@ export function buildBalanceSheetStatement(
   transactions: TransactionRecord[],
   savingsGoals: SavingsGoal[],
   debtRecords: DebtRecord[],
-  bills: BillRecord[]
+  bills: BillRecord[],
+  openingBankBalance = 0,
+  openingCashBalance = 0
 ): BalanceSheetStatement {
-  const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+  const cashSummary = computeSavingsAndCashSummary(
+    transactions,
+    savingsGoals,
+    debtRecords,
+    openingBankBalance,
+    openingCashBalance
+  );
   const cashNet = Number(cashSummary.currentBalance.toFixed(2));
 
   const savingsTotal = Number(savingsGoals.reduce((s, g) => s + g.savedAmount, 0).toFixed(2));
@@ -408,6 +416,8 @@ export function buildFinancialStatsSnapshot(params: {
   bills: BillRecord[];
   recordPayments: RecordPayment[];
   recurringTransactions: RecurringTransaction[];
+  openingBankBalance?: number;
+  openingCashBalance?: number;
 }): FinancialStatsSnapshot {
   const {
     periodLabel,
@@ -420,6 +430,8 @@ export function buildFinancialStatsSnapshot(params: {
     bills,
     recordPayments,
     recurringTransactions,
+    openingBankBalance = 0,
+    openingCashBalance = 0,
   } = params;
 
   const periodTx = allTransactions.filter((t) => t.date >= periodStart && t.date <= periodEnd);
@@ -430,7 +442,13 @@ export function buildFinancialStatsSnapshot(params: {
   const periodExpenses = periodExpenseList.reduce((s, t) => s + t.amount, 0);
   const periodNetProfit = periodIncome - periodExpenses;
 
-  const cashSummary = computeSavingsAndCashSummary(allTransactions, savingsGoals, debtRecords);
+  const cashSummary = computeSavingsAndCashSummary(
+    allTransactions,
+    savingsGoals,
+    debtRecords,
+    openingBankBalance,
+    openingCashBalance
+  );
   const allTimeIncome = cashSummary.allIncome;
   const allTimeExpenses = cashSummary.allExpenses;
   const currentCashBalance = cashSummary.currentBalance;
@@ -438,7 +456,14 @@ export function buildFinancialStatsSnapshot(params: {
   const totalSavings = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
   const savingsTargetTotal = savingsGoals.reduce((s, g) => s + g.targetAmount, 0);
 
-  const bs = buildBalanceSheetStatement(allTransactions, savingsGoals, debtRecords, bills);
+  const bs = buildBalanceSheetStatement(
+    allTransactions,
+    savingsGoals,
+    debtRecords,
+    bills,
+    openingBankBalance,
+    openingCashBalance
+  );
   const totalReceivables = bs.assets
     .filter((a) => a.group === 'Receivables')
     .reduce((s, a) => s + a.amount, 0);

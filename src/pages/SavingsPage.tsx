@@ -16,7 +16,7 @@ import {
 import { getGuestSavingsContributions, GUEST_EVENT } from '../services/guestStore';
 
 export function SavingsPage() {
-  const { user, isGuest, savingsGoals, transactions, debtRecords, currency } = useFinance();
+  const { user, isGuest, profile, savingsGoals, transactions, debtRecords, currency } = useFinance();
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [editingGoal, setEditingGoal] = useState<SavingsGoal | null>(null);
   const [depositGoal, setDepositGoal] = useState<SavingsGoal | null>(null);
@@ -77,7 +77,13 @@ export function SavingsPage() {
     const saved = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
     const remaining = Math.max(0, target - saved);
     const completed = savingsGoals.filter((g) => g.status === 'completed').length;
-    const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+    const cashSummary = computeSavingsAndCashSummary(
+      transactions,
+      savingsGoals,
+      debtRecords,
+      profile?.openingBankBalance || 0,
+      profile?.openingCashBalance || 0
+    );
     return {
       target,
       saved,
@@ -89,7 +95,7 @@ export function SavingsPage() {
       debtRecoveredIn: cashSummary.debtRecoveredIn,
       netDebtCashImpact: cashSummary.netDebtCashImpact,
     };
-  }, [savingsGoals, transactions, debtRecords]);
+  }, [savingsGoals, transactions, debtRecords, profile?.openingBankBalance, profile?.openingCashBalance]);
 
   const openCreateModal = () => {
     setEditingGoal(null);

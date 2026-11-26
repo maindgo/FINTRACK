@@ -81,6 +81,8 @@ export function SettingsPage() {
 
   const [displayName, setDisplayName] = useState(profile?.displayName || user?.displayName || '');
   const [monthlyLimit, setMonthlyLimit] = useState(String(profile?.monthlyBudgetLimit || 0));
+  const [openingBank, setOpeningBank] = useState(String(profile?.openingBankBalance || 0));
+  const [openingCash, setOpeningCash] = useState(String(profile?.openingCashBalance || 0));
   const [savingProfile, setSavingProfile] = useState(false);
   const [savedNotice, setSavedNotice] = useState('');
   const [restoreMsg, setRestoreMsg] = useState('');
@@ -107,6 +109,8 @@ export function SettingsPage() {
     if (profile) {
       setDisplayName(profile.displayName || user?.displayName || '');
       setMonthlyLimit(String(profile.monthlyBudgetLimit || 0));
+      setOpeningBank(String(profile.openingBankBalance || 0));
+      setOpeningCash(String(profile.openingCashBalance || 0));
     }
   }, [profile, user?.displayName]);
 
@@ -119,6 +123,8 @@ export function SettingsPage() {
       await updateUserProfile(user.uid, {
         displayName: displayName.trim() || 'FinTrack User',
         monthlyBudgetLimit: Math.max(0, Number(monthlyLimit) || 0),
+        openingBankBalance: Math.max(0, Number(openingBank) || 0),
+        openingCashBalance: Math.max(0, Number(openingCash) || 0),
       });
       setSavedNotice('Preferences saved.');
       setTimeout(() => setSavedNotice(''), 3000);
@@ -312,6 +318,34 @@ export function SettingsPage() {
               step="1"
               value={monthlyLimit}
               onChange={(e) => setMonthlyLimit(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+              In-Hand Bank / UPI Balance
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={openingBank}
+              onChange={(e) => setOpeningBank(e.target.value)}
+              className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+              In-Hand Cash Balance
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={openingCash}
+              onChange={(e) => setOpeningCash(e.target.value)}
               className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
             />
           </div>

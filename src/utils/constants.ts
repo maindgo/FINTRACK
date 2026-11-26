@@ -43,6 +43,22 @@ export const PAYMENT_METHODS: PaymentMethod[] = [
   'Other',
 ];
 
+export const CASH_PAYMENT_METHODS: PaymentMethod[] = ['Cash'];
+
+export const BANK_PAYMENT_METHODS: PaymentMethod[] = [
+  'UPI',
+  'Bank Transfer',
+  'Net Banking',
+  'Debit Card',
+  'Credit Card',
+  'Wallet',
+  'Other',
+];
+
+export function isCashPaymentMethod(method?: string | null): boolean {
+  return (method || '').trim().toLowerCase() === 'cash';
+}
+
 export const SAVINGS_CATEGORIES: string[] = [
   'Emergency Fund',
   'Home & Property',
@@ -79,8 +95,12 @@ export const NAV_ITEMS: { id: NavSection; label: string }[] = [
   { id: 'reports', label: 'Reports & Analytics' },
   { id: 'insights', label: 'Financial Insights' },
   { id: 'ai-insights', label: 'AI Insights' },
+  { id: 'vip', label: 'VIP' },
+  { id: 'admin', label: 'Admin Panel' },
   { id: 'settings', label: 'Settings' },
 ];
+
+export const DEFAULT_ADMIN_MESSAGE_HEADING = 'IMPORTANT MESSAGE FROM ADMINISTRATOR';
 
 export const CHART_COLORS = [
   '#2563EB', // Blue

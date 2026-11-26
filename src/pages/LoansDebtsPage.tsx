@@ -38,7 +38,7 @@ const STATUS_LABELS: Record<RecordStatus, string> = {
 };
 
 export function LoansDebtsPage() {
-  const { user, debtRecords, recordPayments, transactions, savingsGoals, currency } = useFinance();
+  const { user, profile, debtRecords, recordPayments, transactions, savingsGoals, currency } = useFinance();
   const [filterType, setFilterType] = useState<'all' | DebtRecordType>('all');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<DebtRecord | null>(null);
@@ -97,8 +97,15 @@ export function LoansDebtsPage() {
   }, [debtRecords, today]);
 
   const savingsSummary = useMemo(
-    () => computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords),
-    [transactions, savingsGoals, debtRecords]
+    () =>
+      computeSavingsAndCashSummary(
+        transactions,
+        savingsGoals,
+        debtRecords,
+        profile?.openingBankBalance || 0,
+        profile?.openingCashBalance || 0
+      ),
+    [transactions, savingsGoals, debtRecords, profile?.openingBankBalance, profile?.openingCashBalance]
   );
 
   const openCreate = () => {

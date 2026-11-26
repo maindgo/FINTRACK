@@ -65,6 +65,8 @@ function createDefaultGuestStore(): GuestStoreData {
       currency: 'INR' as CurrencyCode,
       theme: savedTheme,
       monthlyBudgetLimit: 0,
+      openingBankBalance: 0,
+      openingCashBalance: 0,
     },
     transactions: [],
     savingsGoals: [],
@@ -153,7 +155,12 @@ export function getGuestRecordCount(): number {
 
 // --- Guest Mutations ---
 export function guestUpdateProfile(
-  updates: Partial<Pick<UserProfile, 'displayName' | 'currency' | 'theme' | 'monthlyBudgetLimit'>>
+  updates: Partial<
+    Pick<
+      UserProfile,
+      'displayName' | 'currency' | 'theme' | 'monthlyBudgetLimit' | 'openingBankBalance' | 'openingCashBalance'
+    >
+  >
 ): void {
   const store = loadGuestStore();
   store.profile = {
@@ -168,6 +175,22 @@ export function guestUpdateProfile(
           monthlyBudgetLimit:
             Number.isFinite(Number(updates.monthlyBudgetLimit)) && Number(updates.monthlyBudgetLimit) >= 0
               ? Math.min(Number(updates.monthlyBudgetLimit), FIELD_LIMITS.AMOUNT_MAX)
+              : 0,
+        }
+      : {}),
+    ...(updates.openingBankBalance !== undefined
+      ? {
+          openingBankBalance:
+            Number.isFinite(Number(updates.openingBankBalance)) && Number(updates.openingBankBalance) >= 0
+              ? Math.min(Number(Number(updates.openingBankBalance).toFixed(2)), FIELD_LIMITS.AMOUNT_MAX)
+              : 0,
+        }
+      : {}),
+    ...(updates.openingCashBalance !== undefined
+      ? {
+          openingCashBalance:
+            Number.isFinite(Number(updates.openingCashBalance)) && Number(updates.openingCashBalance) >= 0
+              ? Math.min(Number(Number(updates.openingCashBalance).toFixed(2)), FIELD_LIMITS.AMOUNT_MAX)
               : 0,
         }
       : {}),
@@ -786,6 +809,22 @@ export async function migrateGuestStoreToFirestore(uid: string): Promise<number>
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    });
+  }
+
+  const guestOpeningBank = Number(store.profile.openingBankBalance || 0);
+  const guestOpeningCash = Number(store.profile.openingCashBalance || 0);
+  if (guestOpeningBank > 0 || guestOpeningCash > 0) {
+    operations.push((batch) => {
+      batch.set(
+        doc(db, 'users', uid),
+        {
+          openingBankBalance: Math.max(0, Math.min(Number(guestOpeningBank.toFixed(2)), FIELD_LIMITS.AMOUNT_MAX)),
+          openingCashBalance: Math.max(0, Math.min(Number(guestOpeningCash.toFixed(2)), FIELD_LIMITS.AMOUNT_MAX)),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
     });
   }
 

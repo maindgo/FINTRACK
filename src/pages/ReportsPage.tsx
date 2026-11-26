@@ -156,8 +156,23 @@ export function ReportsPage() {
   const expenseCats = useMemo(() => aggregateByCategory(scopedTransactions, 'expense'), [scopedTransactions]);
 
   const balanceSheet = useMemo(
-    () => buildBalanceSheetStatement(transactions, savingsGoals, debtRecords, bills),
-    [transactions, savingsGoals, debtRecords, bills]
+    () =>
+      buildBalanceSheetStatement(
+        transactions,
+        savingsGoals,
+        debtRecords,
+        bills,
+        profile?.openingBankBalance || 0,
+        profile?.openingCashBalance || 0
+      ),
+    [
+      transactions,
+      savingsGoals,
+      debtRecords,
+      bills,
+      profile?.openingBankBalance,
+      profile?.openingCashBalance,
+    ]
   );
   const generalLedger = useMemo(() => buildGeneralLedgerRows(transactions), [transactions]);
   const trialBalance = useMemo(() => buildTrialBalance(transactions), [transactions]);
@@ -175,8 +190,20 @@ export function ReportsPage() {
         bills,
         recordPayments,
         recurringTransactions,
+        openingBankBalance: profile?.openingBankBalance || 0,
+        openingCashBalance: profile?.openingCashBalance || 0,
       }),
-    [transactions, savingsGoals, budgets, debtRecords, bills, recordPayments, recurringTransactions]
+    [
+      transactions,
+      savingsGoals,
+      budgets,
+      debtRecords,
+      bills,
+      recordPayments,
+      recurringTransactions,
+      profile?.openingBankBalance,
+      profile?.openingCashBalance,
+    ]
   );
 
   const savingsChartData = useMemo(

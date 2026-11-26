@@ -13,6 +13,8 @@
    - Once a `BillRecord` with `frequency == 'one_time'` reaches `status == 'paid'`, it cannot be mutated further.
 6. **Strict Payload & Size Caps**: Every string field enforces `.size()` limits, every numeric amount validates bounds (`> 0` or `>= 0`), and every document enforces `keys().hasAll(...)` + `keys().hasOnly(...)` on create and `affectedKeys().hasOnly(...)` on update.
 7. **Admin-Only Global Maintenance Control**: `/appConfig/maintenance` stores only non-PII operational state (`enabled`, `updatedAt`). `get` is permitted for `configId == 'maintenance'` (with `list: if false`) so all visitors see scheduled maintenance immediately, while `create`/`update` require `request.auth.token.email_verified == true && request.auth.token.email == 'maind.go2000@gmail.com'`.
+8. **Admin User Directory & Account Deactivation Enforcement**: Only verified admin (`maind.go2000@gmail.com`) may `list` `/users` or `get` other user profiles and update `accountStatus`/`deactivatedAt` (and cannot deactivate the admin account itself). Deactivated users (`accountStatus == 'deactivated'`) are blocked from updating their profile or creating/updating/deleting any financial subcollection document (`isActiveAccount(userId)`).
+9. **Admin Pop-Up Messaging Control**: `/users/{userId}/adminMessages/{messageId}` may only be created or deleted by verified admin (`maind.go2000@gmail.com`) with `isRead: false` and `readAt: null` on creation. Verified account owners may read their own messages and update ONLY `['isRead', 'readAt', 'updatedAt']` to acknowledge dismissal (`isRead == true && readAt == request.time`), with zero ability to alter `heading`, `message`, or `senderEmail`.
 
 ## 2. The "Dirty Dozen" Attack Payloads (All Must Return PERMISSION_DENIED)
 1. **Cross-Tenant Read/List**: User B (`uid: "userB"`) attempts `getDoc` or `getDocs` on `/users/userA/transactions`.
@@ -28,3 +30,7 @@
 11. **Terminal State Bypass**: User A attempts to modify `totalAmount` on a `DebtRecord` whose `status` is already `'paid'`.
 12. **Resource Exhaustion (1MB String Bomb)**: User A attempts to create a transaction with `notes` of 50,000 characters or `receiptDataUrl` exceeding 250,000 characters.
 13. **Unauthorized Maintenance Toggle**: A non-admin or unverified-email user attempts to write `/appConfig/maintenance` or list `/appConfig`.
+14. **Self-Reactivation / Role Tampering**: A deactivated or regular user attempts to update `accountStatus: 'active'` on `/users/{userId}` or write to `/users/{userId}/transactions` while deactivated.
+15. **Non-Admin User Enumeration**: Any non-admin user attempts `getDocs(collection(db, 'users'))`.
+16. **Forged Admin Pop-Up Message**: A regular user attempts to create a document in `/users/{userId}/adminMessages` impersonating the administrator.
+17. **Admin Message Content Tampering**: A user attempts to modify `heading` or `message` on an existing `/users/{userId}/adminMessages/{messageId}` instead of only marking it read.

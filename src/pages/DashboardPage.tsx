@@ -17,15 +17,19 @@ import {
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  Banknote,
   Clock,
   Download,
+  Edit2,
   FileSpreadsheet,
+  Landmark,
   PiggyBank,
   Plus,
   Sparkles,
   TrendingDown,
   TrendingUp,
   Wallet,
+  X,
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import { DashboardDateFilter, NavSection } from '../types/finance';
@@ -42,6 +46,7 @@ import {
   buildMonthSpendingComparison,
   computeMonthlyExpenseForecast,
   computeSavingsAndCashSummary,
+  computeWalletBalances,
 } from '../utils/analytics';
 import { buildFinancialStatsSnapshot } from '../utils/erpAnalytics';
 import { exportFinancialStatsToExcel, exportFinancialStatsToPDF } from '../utils/exporters';
@@ -53,6 +58,8 @@ interface DashboardPageProps {
 
 export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPageProps) {
   const {
+    profile,
+    updateOpeningBalances,
     transactions,
     savingsGoals,
     budgets,
@@ -68,6 +75,10 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
   const [customStart, setCustomStart] = useState(getTodayStr().slice(0, 8) + '01');
   const [customEnd, setCustomEnd] = useState(getTodayStr());
   const [trendMode, setTrendMode] = useState<'cumulative' | 'daily'>('cumulative');
+  const [balanceModalOpen, setBalanceModalOpen] = useState(false);
+  const [bankInput, setBankInput] = useState('0');
+  const [cashInput, setCashInput] = useState('0');
+  const [savingBalances, setSavingBalances] = useState(false);
 
   const dateRange = useMemo(
     () => getDateRangeForFilter(filter, customStart, customEnd),
@@ -91,7 +102,13 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
       .reduce((s, t) => s + t.amount, 0);
     const netProfit = totalIncome - totalExpenses;
 
-    const cashSummary = computeSavingsAndCashSummary(transactions, savingsGoals, debtRecords);
+    const cashSummary = computeSavingsAndCashSummary(
+      transactions,
+      savingsGoals,
+      debtRecords,
+      profile?.openingBankBalance || 0,
+      profile?.openingCashBalance || 0
+    );
     const {
       currentBalance,
       goalSavings,
@@ -159,7 +176,55 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
       totalMoneyReceived,
       totalMoneySpent,
     };
-  }, [filteredTx, transactions, savingsGoals, bills, debtRecords, recordPayments, dateRange]);
+  }, [
+    filteredTx,
+    transactions,
+    savingsGoals,
+    bills,
+    debtRecords,
+    recordPayments,
+    dateRange,
+    profile?.openingBankBalance,
+    profile?.openingCashBalance,
+  ]);
+
+  const walletBalances = useMemo(
+    () =>
+      computeWalletBalances(
+        transactions,
+        debtRecords,
+        recordPayments,
+        profile?.openingBankBalance || 0,
+        profile?.openingCashBalance || 0
+      ),
+    [
+      transactions,
+      debtRecords,
+      recordPayments,
+      profile?.openingBankBalance,
+      profile?.openingCashBalance,
+    ]
+  );
+
+  const openBalanceEditor = () => {
+    setBankInput(String(profile?.openingBankBalance || 0));
+    setCashInput(String(profile?.openingCashBalance || 0));
+    setBalanceModalOpen(true);
+  };
+
+  const handleSaveOpeningBalances = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBalances(true);
+    try {
+      await updateOpeningBalances(
+        Math.max(0, Number(bankInput) || 0),
+        Math.max(0, Number(cashInput) || 0)
+      );
+      setBalanceModalOpen(false);
+    } finally {
+      setSavingBalances(false);
+    }
+  };
 
   const statsSnapshot = useMemo(
     () =>
@@ -174,6 +239,8 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
         bills,
         recordPayments,
         recurringTransactions,
+        openingBankBalance: profile?.openingBankBalance || 0,
+        openingCashBalance: profile?.openingCashBalance || 0,
       }),
     [
       dateRange,
@@ -184,6 +251,8 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
       bills,
       recordPayments,
       recurringTransactions,
+      profile?.openingBankBalance,
+      profile?.openingCashBalance,
     ]
   );
 
@@ -391,6 +460,76 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
           tone="neutral"
           icon={ArrowUpRight}
         />
+      </div>
+
+      {/* Bank / UPI vs Cash In-Hand Separate Wallets */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Bank / UPI &amp; Cash in Hand Balances
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              UPI, Bank Transfer &amp; card entries update Bank/UPI · Cash entries update Cash in Hand separately
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={openBalanceEditor}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 self-start sm:self-auto shrink-0"
+          >
+            <Edit2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            Set In-Hand Amounts
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <Landmark className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>Bank / UPI Balance</span>
+              </div>
+              <div
+                className={`text-xl font-bold font-mono tabular-nums ${
+                  walletBalances.bankBalance >= 0
+                    ? 'text-slate-900 dark:text-white'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                {formatCurrency(walletBalances.bankBalance, currency)}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                In hand {formatCurrency(walletBalances.openingBankBalance, currency)} · +
+                {formatCurrency(walletBalances.bankIncome + walletBalances.bankDebtIn, currency)} · −
+                {formatCurrency(walletBalances.bankExpenses + walletBalances.bankDebtOut, currency)}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+                <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Cash in Hand Balance</span>
+              </div>
+              <div
+                className={`text-xl font-bold font-mono tabular-nums ${
+                  walletBalances.cashBalance >= 0
+                    ? 'text-slate-900 dark:text-white'
+                    : 'text-red-600 dark:text-red-400'
+                }`}
+              >
+                {formatCurrency(walletBalances.cashBalance, currency)}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                In hand {formatCurrency(walletBalances.openingCashBalance, currency)} · +
+                {formatCurrency(walletBalances.cashIncome + walletBalances.cashDebtIn, currency)} · −
+                {formatCurrency(walletBalances.cashExpenses + walletBalances.cashDebtOut, currency)}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Empty State Prompt if user has zero records */}
@@ -854,6 +993,78 @@ export function DashboardPage({ onNavigate, onAddTransaction }: DashboardPagePro
             )}
           </div>
         </>
+      )}
+
+      {/* Edit In-Hand Opening Balances Modal */}
+      {balanceModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Set In-Hand / Opening Balances
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Enter the starting amount you currently hold in Bank/UPI and physical Cash.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBalanceModalOpen(false)}
+                aria-label="Close modal"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveOpeningBalances} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Bank / UPI Opening Balance
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={bankInput}
+                  onChange={(e) => setBankInput(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                  Cash in Hand Opening Balance
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={cashInput}
+                  onChange={(e) => setCashInput(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setBalanceModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingBalances}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {savingBalances ? 'Saving...' : 'Save Balances'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

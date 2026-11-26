@@ -254,34 +254,6 @@ export function AIInsightsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Right-to-Left Scrolling Status Banner */}
-      <div
-        role="region"
-        aria-label="AI Insights technical notice"
-        className="w-full rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-amber-900 dark:text-amber-200 overflow-hidden py-2.5 select-none"
-      >
-        <div className="animate-marquee-rtl">
-          <span className="inline-flex items-center gap-2.5 px-6 text-xs sm:text-sm font-medium tracking-wide whitespace-nowrap">
-            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <span>
-              AI Insights not working due to some technical problem sorry for inconvenience we improve this for your better experience
-            </span>
-            <span className="text-amber-400 dark:text-amber-600 mx-4" aria-hidden="true">
-              •
-            </span>
-          </span>
-          <span className="inline-flex items-center gap-2.5 px-6 text-xs sm:text-sm font-medium tracking-wide whitespace-nowrap">
-            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <span>
-              AI Insights not working due to some technical problem sorry for inconvenience we improve this for your better experience
-            </span>
-            <span className="text-amber-400 dark:text-amber-600 mx-4" aria-hidden="true">
-              •
-            </span>
-          </span>
-        </div>
-      </div>
-
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">

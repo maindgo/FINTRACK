@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import express, { NextFunction, Request, Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -452,10 +452,151 @@ const INSIGHTS_RESPONSE_SCHEMA = {
   ],
 };
 
+const ALLOWED_INCOME_CATEGORIES = [
+  'Salary',
+  'Freelancing',
+  'Business Income',
+  'Online Earnings',
+  'Investments',
+  'Interest',
+  'Other Income',
+] as const;
+
+const ALLOWED_EXPENSE_CATEGORIES = [
+  'Food',
+  'Shopping',
+  'Transport',
+  'Rent',
+  'Electricity',
+  'Internet',
+  'Education',
+  'Healthcare',
+  'Entertainment',
+  'Travel',
+  'EMI',
+  'Bills',
+  'Other Expenses',
+] as const;
+
+const ALLOWED_PAYMENT_METHODS = [
+  'UPI',
+  'Bank Transfer',
+  'Cash',
+  'Credit Card',
+  'Debit Card',
+  'Wallet',
+  'Net Banking',
+  'Other',
+] as const;
+
+const ALLOWED_AUDIO_MIME_TYPES = new Set([
+  'audio/webm',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/m4a',
+  'audio/ogg',
+  'audio/wav',
+  'audio/mpeg',
+  'audio/aac',
+  'audio/3gpp',
+]);
+
+const VOICE_TRANSACTION_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    transcript: { type: Type.STRING },
+    type: { type: Type.STRING },
+    amount: { type: Type.NUMBER },
+    title: { type: Type.STRING },
+    category: { type: Type.STRING },
+    paymentMethod: { type: Type.STRING },
+    date: { type: Type.STRING },
+    time: { type: Type.STRING },
+    description: { type: Type.STRING },
+    missingAmountReason: { type: Type.STRING },
+  },
+  required: [
+    'transcript',
+    'type',
+    'amount',
+    'title',
+    'category',
+    'paymentMethod',
+    'date',
+    'time',
+    'description',
+    'missingAmountReason',
+  ],
+};
+
+function normalizeVoiceTransaction(
+  raw: Record<string, unknown>,
+  fallbackDate: string,
+  fallbackTime: string
+) {
+  const type = raw.type === 'income' ? 'income' : 'expense';
+  const rawAmt = Number(raw.amount);
+  const amount =
+    Number.isFinite(rawAmt) && rawAmt > 0
+      ? Math.min(1_000_000_000, Number(rawAmt.toFixed(2)))
+      : 0;
+
+  const allowedCats: readonly string[] =
+    type === 'income' ? ALLOWED_INCOME_CATEGORIES : ALLOWED_EXPENSE_CATEGORIES;
+  const rawCat = sanitizeText(raw.category, 60);
+  const matchedCat =
+    allowedCats.find((c) => c.toLowerCase() === rawCat.toLowerCase()) ||
+    (type === 'income' ? 'Other Income' : 'Other Expenses');
+
+  const rawPm = sanitizeText(raw.paymentMethod, 40);
+  const matchedPm =
+    ALLOWED_PAYMENT_METHODS.find((m) => m.toLowerCase() === rawPm.toLowerCase()) || 'UPI';
+
+  const rawDate = sanitizeText(raw.date, 10);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : fallbackDate;
+
+  const rawTime = sanitizeText(raw.time, 5);
+  const time = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : fallbackTime;
+
+  const title =
+    sanitizeText(raw.title, 140) ||
+    (type === 'income' ? `${matchedCat} Received` : `${matchedCat} Expense`);
+
+  const transcript = sanitizeText(raw.transcript, 500);
+  const description = sanitizeText(raw.description, 500);
+  const missingAmountReason =
+    amount > 0
+      ? ''
+      : sanitizeText(raw.missingAmountReason, 240) ||
+        'No clear monetary amount was detected in the voice recording.';
+
+  return {
+    transcript,
+    type,
+    amount,
+    title,
+    category: matchedCat,
+    paymentMethod: matchedPm,
+    date,
+    time,
+    description,
+    missingAmountReason,
+  };
+}
+
 async function startServer(): Promise<void> {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '128kb' }));
+
+  const json128kb = express.json({ limit: '128kb' });
+  const json2mb = express.json({ limit: '2mb' });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/api/ai/voice-transaction') {
+      json2mb(req, res, next);
+    } else {
+      json128kb(req, res, next);
+    }
+  });
 
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({
@@ -523,7 +664,22 @@ async function startServer(): Promise<void> {
         return;
       }
 
-      const parsed = JSON.parse(rawText);
+      const cleanedJson = rawText
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(cleanedJson);
+      } catch {
+        res.status(502).json({
+          error: 'Gemini returned an unexpected format. Please try refreshing AI Insights.',
+          code: 'INVALID_JSON_RESPONSE',
+        });
+        return;
+      }
+
       res.json({
         model: GEMINI_MODEL,
         generatedAt: new Date().toISOString(),
@@ -623,6 +779,134 @@ async function startServer(): Promise<void> {
     }
   });
 
+  app.post('/api/ai/voice-transaction', aiRateLimiter, async (req: Request, res: Response) => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      res.status(503).json({
+        error:
+          'GEMINI_API_KEY is not configured yet. Add GEMINI_API_KEY in Settings > Secrets to use Voice AI transaction entry.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      audioBase64?: unknown;
+      mimeType?: unknown;
+      transcriptText?: unknown;
+      localDate?: unknown;
+      localTime?: unknown;
+    };
+
+    const rawDate = sanitizeText(body.localDate, 10);
+    const todayFallback = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+      ? rawDate
+      : new Date().toISOString().slice(0, 10);
+    const rawTime = sanitizeText(body.localTime, 5);
+    const timeFallback = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : '12:00';
+
+    const transcriptText = sanitizeText(body.transcriptText, 600);
+    const audioBase64 = typeof body.audioBase64 === 'string' ? body.audioBase64.trim() : '';
+    const baseMime = sanitizeText(body.mimeType, 80).split(';')[0].trim().toLowerCase();
+
+    if (!audioBase64 && !transcriptText) {
+      res.status(400).json({
+        error: 'Please record a voice clip or speak/type a transaction phrase.',
+        code: 'BAD_REQUEST',
+      });
+      return;
+    }
+
+    if (audioBase64) {
+      if (!ALLOWED_AUDIO_MIME_TYPES.has(baseMime)) {
+        res.status(400).json({
+          error: 'Unsupported audio recording format. Please try again or type your entry.',
+          code: 'UNSUPPORTED_AUDIO_FORMAT',
+        });
+        return;
+      }
+      if (audioBase64.length > 1_800_000 || !/^[A-Za-z0-9+/=]+$/.test(audioBase64)) {
+        res.status(400).json({
+          error: 'Voice recording is too large or invalid. Please keep recordings under 15 seconds.',
+          code: 'AUDIO_TOO_LARGE',
+        });
+        return;
+      }
+    }
+
+    const instructionPrompt = [
+      'Extract a personal finance transaction from the user voice audio or text into strict JSON.',
+      `Reference Today Date: ${todayFallback}. Reference Current Time: ${timeFallback}.`,
+      `Allowed type values: "income" or "expense". Default to "expense" unless user explicitly says received/earned/salary/refund/credited/income.`,
+      `Allowed income categories: ${ALLOWED_INCOME_CATEGORIES.join(', ')}.`,
+      `Allowed expense categories: ${ALLOWED_EXPENSE_CATEGORIES.join(', ')}.`,
+      `Allowed paymentMethod values: ${ALLOWED_PAYMENT_METHODS.join(', ')}. Map PhonePe/GPay/Paytm/BHIM/UPI/QR to "UPI"; NEFT/IMPS/RTGS/Bank to "Bank Transfer"; Cash/notes to "Cash"; Card/Credit/Debit accordingly.`,
+      'If user says "yesterday", subtract 1 day from Reference Today Date. Otherwise use Reference Today Date unless a specific date is stated.',
+      'Set transcript to an accurate verbatim transcription of what the user said (or the provided text).',
+      'If no numeric monetary amount is spoken, set amount to 0 and explain briefly in missingAmountReason.',
+      transcriptText ? `Spoken/Typed input: "${transcriptText}"` : 'Listen carefully to the attached audio clip.',
+    ].join('\n');
+
+    try {
+      const contents = audioBase64
+        ? [
+            { text: instructionPrompt },
+            { inlineData: { mimeType: baseMime, data: audioBase64 } },
+          ]
+        : instructionPrompt;
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents,
+        config: {
+          systemInstruction:
+            'You are FinTrack Voice AI Parser. Convert short spoken Indian personal finance notes (English, Hindi, or Hinglish) into clean structured JSON.',
+          responseMimeType: 'application/json',
+          responseSchema: VOICE_TRANSACTION_SCHEMA,
+        },
+      });
+
+      const rawText = (response.text || '').trim();
+      if (!rawText) {
+        res.status(502).json({
+          error: 'Gemini returned an empty response for your voice clip. Please try again.',
+          code: 'EMPTY_RESPONSE',
+        });
+        return;
+      }
+
+      const cleanedJson = rawText
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+
+      let parsedRaw: unknown;
+      try {
+        parsedRaw = JSON.parse(cleanedJson);
+      } catch {
+        res.status(502).json({
+          error: 'Could not parse the voice transaction cleanly. Please try speaking again.',
+          code: 'INVALID_JSON_RESPONSE',
+        });
+        return;
+      }
+
+      const parsedObj =
+        parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)
+          ? (parsedRaw as Record<string, unknown>)
+          : {};
+      const transaction = normalizeVoiceTransaction(parsedObj, todayFallback, timeFallback);
+
+      res.json({
+        model: GEMINI_MODEL,
+        transaction,
+      });
+    } catch (err: unknown) {
+      const mapped = mapGeminiError(err);
+      res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
+    }
+  });
+
   const distDir = path.resolve(__dirname, 'dist');
   const distIndex = path.resolve(distDir, 'index.html');
   const useViteDev =
@@ -638,7 +922,11 @@ async function startServer(): Promise<void> {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(distDir));
-    app.get('*', (_req: Request, res: Response) => {
+    app.get('*', (req: Request, res: Response) => {
+      if (req.path.startsWith('/api/')) {
+        res.status(404).json({ error: 'API endpoint not found.', code: 'NOT_FOUND' });
+        return;
+      }
       res.sendFile(distIndex);
     });
   }

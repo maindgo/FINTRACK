@@ -3,6 +3,7 @@ import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
+  AdminMessage,
   BillRecord,
   BrowserNotificationPermission,
   BudgetRecord,
@@ -19,6 +20,7 @@ import {
 } from '../types/finance';
 import {
   ensureUserProfile,
+  markAdminMessageRead,
   runRecurringTransactionNow,
   setMaintenanceMode,
   subscribeToMaintenanceConfig,
@@ -84,6 +86,10 @@ interface FinanceContextValue {
   restoreDismissedNotifications: () => void;
   sendTestNotification: () => Promise<{ ok: boolean; message: string }>;
   isAdmin: boolean;
+  isAccountDeactivated: boolean;
+  adminMessages: AdminMessage[];
+  acknowledgeAdminMessage: (messageId: string) => Promise<void>;
+  updateOpeningBalances: (bankAmount: number, cashAmount: number) => Promise<void>;
   maintenanceEnabled: boolean;
   maintenanceLoading: boolean;
   maintenanceUpdating: boolean;
@@ -121,6 +127,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
   const [recordPayments, setRecordPayments] = useState<RecordPayment[]>([]);
   const [bills, setBills] = useState<BillRecord[]>([]);
   const [recurringTransactions, setRecurringTransactions] = useState<RecurringTransaction[]>([]);
+  const [adminMessages, setAdminMessages] = useState<AdminMessage[]>([]);
   const [notificationPrefs, setNotificationPrefs] = useState<NotificationPrefs>(DEFAULT_NOTIFICATION_PREFS);
   const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>(() =>
     getBrowserNotificationPermission()
@@ -138,6 +145,9 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     firebaseUser &&
       firebaseUser.emailVerified &&
       firebaseUser.email?.toLowerCase() === ADMIN_EMAIL
+  );
+  const isAccountDeactivated = Boolean(
+    firebaseUser && !isGuest && !isAdmin && profile?.accountStatus === 'deactivated'
   );
 
   const user: User | null = firebaseUser
@@ -203,6 +213,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
           setRecordPayments([]);
           setBills([]);
           setRecurringTransactions([]);
+          setAdminMessages([]);
           setDataLoading(false);
           profileInitAttempted.current = null;
           recurringProcessedSession.current.clear();
@@ -241,6 +252,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     setRecordPayments([]);
     setBills([]);
     setRecurringTransactions([]);
+    setAdminMessages([]);
     setDataLoading(false);
   }, []);
 
@@ -402,6 +414,16 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       (error) => handleFirestoreError(error, OperationType.LIST, `users/${uid}/recurringTransactions`)
     );
 
+    const unsubAdminMessages = onSnapshot(
+      query(collection(db, 'users', uid, 'adminMessages'), where('userId', '==', uid)),
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as AdminMessage));
+        list.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+        setAdminMessages(list);
+      },
+      (error) => handleFirestoreError(error, OperationType.LIST, `users/${uid}/adminMessages`)
+    );
+
     return () => {
       unsubProfile();
       unsubTransactions();
@@ -411,6 +433,7 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       unsubPayments();
       unsubBills();
       unsubRecurring();
+      unsubAdminMessages();
     };
   }, [authReady, firebaseUser, isGuest]);
 
@@ -460,6 +483,17 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [activeUid, profile]
+  );
+
+  const updateOpeningBalances = useCallback(
+    async (bankAmount: number, cashAmount: number) => {
+      if (!activeUid) return;
+      await updateUserProfile(activeUid, {
+        openingBankBalance: Math.max(0, Number(bankAmount) || 0),
+        openingCashBalance: Math.max(0, Number(cashAmount) || 0),
+      });
+    },
+    [activeUid]
   );
 
   const currency: CurrencyCode = profile?.currency || 'INR';
@@ -637,6 +671,14 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
     [isAdmin]
   );
 
+  const acknowledgeAdminMessage = useCallback(
+    async (messageId: string) => {
+      if (!firebaseUser || !firebaseUser.emailVerified) return;
+      await markAdminMessageRead(firebaseUser.uid, messageId);
+    },
+    [firebaseUser]
+  );
+
   return (
     <FinanceContext.Provider
       value={{
@@ -675,6 +717,10 @@ export function FinanceProvider({ children }: { children: React.ReactNode }) {
         restoreDismissedNotifications,
         sendTestNotification,
         isAdmin,
+        isAccountDeactivated,
+        adminMessages,
+        acknowledgeAdminMessage,
+        updateOpeningBalances,
         maintenanceEnabled,
         maintenanceLoading,
         maintenanceUpdating,

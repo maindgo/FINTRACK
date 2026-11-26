@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
+  AccountStatus,
   BillRecord,
   BudgetRecord,
   CurrencyCode,
@@ -25,7 +26,11 @@ import {
   TransactionRecord,
   UserProfile,
 } from '../types/finance';
-import { FIELD_LIMITS } from '../utils/constants';
+import {
+  ADMIN_EMAIL,
+  DEFAULT_ADMIN_MESSAGE_HEADING,
+  FIELD_LIMITS,
+} from '../utils/constants';
 import { addFrequencyToDate, getTodayStr } from '../utils/formatters';
 import {
   clearGuestStoreData,
@@ -91,6 +96,10 @@ export async function ensureUserProfile(
         currency: 'INR' as CurrencyCode,
         theme: initialTheme,
         monthlyBudgetLimit: 0,
+        openingBankBalance: 0,
+        openingCashBalance: 0,
+        accountStatus: 'active' as AccountStatus,
+        deactivatedAt: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -103,7 +112,12 @@ export async function ensureUserProfile(
 
 export async function updateUserProfile(
   uid: string,
-  updates: Partial<Pick<UserProfile, 'displayName' | 'currency' | 'theme' | 'monthlyBudgetLimit'>>
+  updates: Partial<
+    Pick<
+      UserProfile,
+      'displayName' | 'currency' | 'theme' | 'monthlyBudgetLimit' | 'openingBankBalance' | 'openingCashBalance'
+    >
+  >
 ): Promise<void> {
   if (uid === GUEST_UID) {
     guestUpdateProfile(updates);
@@ -124,6 +138,16 @@ export async function updateUserProfile(
     if (updates.monthlyBudgetLimit !== undefined) {
       const val = Number(updates.monthlyBudgetLimit);
       payload.monthlyBudgetLimit = Number.isFinite(val) && val >= 0 ? Math.min(val, FIELD_LIMITS.AMOUNT_MAX) : 0;
+    }
+    if (updates.openingBankBalance !== undefined) {
+      const val = Number(updates.openingBankBalance);
+      payload.openingBankBalance =
+        Number.isFinite(val) && val >= 0 ? Math.min(Number(val.toFixed(2)), FIELD_LIMITS.AMOUNT_MAX) : 0;
+    }
+    if (updates.openingCashBalance !== undefined) {
+      const val = Number(updates.openingCashBalance);
+      payload.openingCashBalance =
+        Number.isFinite(val) && val >= 0 ? Math.min(Number(val.toFixed(2)), FIELD_LIMITS.AMOUNT_MAX) : 0;
     }
     await updateDoc(doc(db, 'users', uid), payload);
   } catch (error) {
@@ -879,5 +903,105 @@ export async function setMaintenanceMode(enabled: boolean): Promise<void> {
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+// --- Admin User Directory & Account Lifecycle (Admin-Only via Firestore Rules) ---
+export function subscribeAllUsersForAdmin(
+  onUpdate: (users: UserProfile[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const usersRef = collection(db, 'users');
+  return onSnapshot(
+    usersRef,
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        uid: d.id,
+        ...(d.data() as Omit<UserProfile, 'uid'>),
+      })) as UserProfile[];
+      list.sort((a, b) => {
+        const aSec = a.createdAt?.seconds ?? 0;
+        const bSec = b.createdAt?.seconds ?? 0;
+        return bSec - aSec;
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) {
+        onError(error);
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'users');
+      }
+    }
+  );
+}
+
+export async function setUserAccountStatus(
+  targetUid: string,
+  status: AccountStatus
+): Promise<void> {
+  const path = `users/${targetUid}`;
+  try {
+    await updateDoc(doc(db, 'users', targetUid), {
+      accountStatus: status,
+      deactivatedAt: status === 'deactivated' ? serverTimestamp() : null,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// --- Admin Pop-Up Messages to User Accounts ---
+export async function sendAdminPopupMessageToUsers(
+  targetUids: string[],
+  heading: string,
+  message: string
+): Promise<number> {
+  const uniqueUids = Array.from(new Set(targetUids.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueUids.length === 0) return 0;
+
+  const cleanHeading = clampStr(heading, 120) || DEFAULT_ADMIN_MESSAGE_HEADING;
+  const cleanMessage = clampStr(message, 1500);
+  if (!cleanMessage) {
+    throw new Error('Please write a message before sending.');
+  }
+
+  try {
+    for (let i = 0; i < uniqueUids.length; i += 400) {
+      const chunk = uniqueUids.slice(i, i + 400);
+      const batch = writeBatch(db);
+      for (const targetUid of chunk) {
+        const msgId = generateDocId();
+        batch.set(doc(db, 'users', targetUid, 'adminMessages', msgId), {
+          userId: targetUid,
+          heading: cleanHeading,
+          message: cleanMessage,
+          senderEmail: ADMIN_EMAIL,
+          isRead: false,
+          readAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    }
+    return uniqueUids.length;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'users/*/adminMessages');
+  }
+}
+
+export async function markAdminMessageRead(uid: string, messageId: string): Promise<void> {
+  if (uid === GUEST_UID) return;
+  const path = `users/${uid}/adminMessages/${messageId}`;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'adminMessages', messageId), {
+      isRead: true,
+      readAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }

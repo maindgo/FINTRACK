@@ -10,6 +10,8 @@ import { MaintenancePage } from './components/MaintenancePage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { SplashLoadingScreen } from './components/SplashLoadingScreen';
 import { TransactionModal } from './components/TransactionModal';
+import { VoiceTransactionModal } from './components/VoiceTransactionModal';
+import { AdminPopupMessageModal } from './components/AdminPopupMessageModal';
 import { ReceiptPreviewModal } from './components/ReceiptPreviewModal';
 import { DashboardPage } from './pages/DashboardPage';
 import { LedgerCategoryPage } from './pages/LedgerCategoryPage';
@@ -22,6 +24,8 @@ import { BillsEmisPage } from './pages/BillsEmisPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { InsightsPage } from './pages/InsightsPage';
 import { AIInsightsPage } from './pages/AIInsightsPage';
+import { VipPage } from './pages/VipPage';
+import { AdminPage } from './pages/AdminPage';
 import { SettingsPage } from './pages/SettingsPage';
 import {
   clearSecurityConfig,
@@ -31,7 +35,7 @@ import {
   SecurityLockConfig,
 } from './services/securityService';
 import { NavSection, TransactionRecord, TransactionType } from './types/finance';
-import { NAV_ITEMS } from './utils/constants';
+import { NAV_ITEMS, SUPPORT_EMAIL } from './utils/constants';
 
 const VALID_SECTIONS = new Set<NavSection>(NAV_ITEMS.map((item) => item.id));
 
@@ -44,6 +48,9 @@ function FinTrackWorkspace() {
     isGuest,
     exitGuestMode,
     isAdmin,
+    isAccountDeactivated,
+    adminMessages,
+    acknowledgeAdminMessage,
     maintenanceEnabled,
     maintenanceLoading,
   } = useFinance();
@@ -60,6 +67,7 @@ function FinTrackWorkspace() {
     return 'dashboard';
   });
   const [txModalOpen, setTxModalOpen] = useState(false);
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [txInitialType, setTxInitialType] = useState<TransactionType>('expense');
   const [editingTx, setEditingTx] = useState<TransactionRecord | null>(null);
   const [receiptRecord, setReceiptRecord] = useState<TransactionRecord | null>(null);
@@ -208,6 +216,35 @@ function FinTrackWorkspace() {
     return <AuthView />;
   }
 
+  if (isAccountDeactivated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-red-200 dark:border-red-900 rounded-2xl p-8 text-center space-y-4 shadow-xl">
+          <div className="w-12 h-12 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 flex items-center justify-center text-red-600 dark:text-red-400 mx-auto font-bold text-lg">
+            !
+          </div>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">
+            Account Deactivated
+          </h1>
+          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+            Your FinTrack account (<span className="font-semibold">{user.email}</span>) has been deactivated by an administrator. If you think this is an error, please contact{' '}
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-emerald-600 dark:text-emerald-400 font-semibold underline">
+              {SUPPORT_EMAIL}
+            </a>
+            .
+          </p>
+          <button
+            type="button"
+            onClick={() => signOut(auth)}
+            className="w-full py-2.5 px-4 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const openAddTransaction = (type: TransactionType) => {
     setEditingTx(null);
     setTxInitialType(type);
@@ -220,22 +257,26 @@ function FinTrackWorkspace() {
     setTxModalOpen(true);
   };
 
+  const resolvedSection: NavSection =
+    activeSection === 'admin' && !isAdmin ? 'dashboard' : activeSection;
+
   return (
     <LayoutShell
-      activeSection={activeSection}
+      activeSection={resolvedSection}
       onSelectSection={setActiveSection}
       onQuickAddTransaction={openAddTransaction}
+      onOpenVoiceEntry={() => setVoiceModalOpen(true)}
       securityConfigured={isAppSecurityConfigured(securityConfig)}
       onLockApp={handleLockApp}
       onPreviewMaintenance={() => setAdminBypassMaintenance(false)}
     >
-      {activeSection === 'dashboard' && (
+      {resolvedSection === 'dashboard' && (
         <DashboardPage
           onNavigate={setActiveSection}
           onAddTransaction={openAddTransaction}
         />
       )}
-      {activeSection === 'income' && (
+      {resolvedSection === 'income' && (
         <LedgerCategoryPage
           mode="income"
           onAddNew={openAddTransaction}
@@ -243,7 +284,7 @@ function FinTrackWorkspace() {
           onViewReceipt={setReceiptRecord}
         />
       )}
-      {activeSection === 'expenses' && (
+      {resolvedSection === 'expenses' && (
         <LedgerCategoryPage
           mode="expense"
           onAddNew={openAddTransaction}
@@ -251,22 +292,24 @@ function FinTrackWorkspace() {
           onViewReceipt={setReceiptRecord}
         />
       )}
-      {activeSection === 'transactions' && (
+      {resolvedSection === 'transactions' && (
         <TransactionsPage
           onAddNew={openAddTransaction}
           onEdit={openEditTransaction}
           onViewReceipt={setReceiptRecord}
         />
       )}
-      {activeSection === 'profit-loss' && <ProfitLossPage />}
-      {activeSection === 'savings' && <SavingsPage />}
-      {activeSection === 'budgets' && <BudgetsPage />}
-      {activeSection === 'loans-debts' && <LoansDebtsPage />}
-      {activeSection === 'bills-emis' && <BillsEmisPage />}
-      {activeSection === 'reports' && <ReportsPage />}
-      {activeSection === 'insights' && <InsightsPage />}
-      {activeSection === 'ai-insights' && <AIInsightsPage />}
-      {activeSection === 'settings' && <SettingsPage />}
+      {resolvedSection === 'profit-loss' && <ProfitLossPage />}
+      {resolvedSection === 'savings' && <SavingsPage />}
+      {resolvedSection === 'budgets' && <BudgetsPage />}
+      {resolvedSection === 'loans-debts' && <LoansDebtsPage />}
+      {resolvedSection === 'bills-emis' && <BillsEmisPage />}
+      {resolvedSection === 'reports' && <ReportsPage />}
+      {resolvedSection === 'insights' && <InsightsPage />}
+      {resolvedSection === 'ai-insights' && <AIInsightsPage />}
+      {resolvedSection === 'vip' && <VipPage onNavigate={setActiveSection} />}
+      {resolvedSection === 'admin' && isAdmin && <AdminPage />}
+      {resolvedSection === 'settings' && <SettingsPage />}
 
       <TransactionModal
         open={txModalOpen}
@@ -277,6 +320,17 @@ function FinTrackWorkspace() {
           setTxModalOpen(false);
           setEditingTx(null);
         }}
+      />
+
+      <VoiceTransactionModal
+        open={voiceModalOpen}
+        uid={user.uid}
+        onClose={() => setVoiceModalOpen(false)}
+      />
+
+      <AdminPopupMessageModal
+        messages={adminMessages.filter((m) => !m.isRead)}
+        onAcknowledge={acknowledgeAdminMessage}
       />
 
       <ReceiptPreviewModal

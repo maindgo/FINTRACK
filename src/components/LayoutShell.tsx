@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   CloudUpload,
   CreditCard,
+  Crown,
   HandCoins,
   Info,
   LayoutDashboard,
@@ -21,10 +22,12 @@ import {
   LogIn,
   LogOut,
   Menu,
+  Mic,
   Moon,
   PiggyBank,
   Plus,
   Settings,
+  Shield,
   Sparkles,
   Sun,
   Target,
@@ -53,6 +56,8 @@ const NAV_ICONS: Record<NavSection, React.ComponentType<{ className?: string }>>
   reports: BarChart3,
   insights: Lightbulb,
   'ai-insights': Sparkles,
+  vip: Crown,
+  admin: Shield,
   settings: Settings,
 };
 
@@ -60,6 +65,7 @@ interface LayoutShellProps {
   activeSection: NavSection;
   onSelectSection: (section: NavSection) => void;
   onQuickAddTransaction: (type: 'income' | 'expense') => void;
+  onOpenVoiceEntry?: () => void;
   securityConfigured?: boolean;
   onLockApp?: () => void;
   onPreviewMaintenance?: () => void;
@@ -70,6 +76,7 @@ export function LayoutShell({
   activeSection,
   onSelectSection,
   onQuickAddTransaction,
+  onOpenVoiceEntry,
   securityConfigured = false,
   onLockApp,
   onPreviewMaintenance,
@@ -187,7 +194,7 @@ export function LayoutShell({
 
       {/* Navigation Links */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter((item) => item.id !== 'admin' || isAdmin).map((item) => {
           const Icon = NAV_ICONS[item.id];
           const isActive = activeSection === item.id;
           return (
@@ -531,6 +538,19 @@ export function LayoutShell({
                 className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 <Lock className="w-4 h-4" />
+              </button>
+            )}
+
+            {onOpenVoiceEntry && (
+              <button
+                type="button"
+                onClick={onOpenVoiceEntry}
+                title="Add entry using Voice AI"
+                aria-label="Voice AI Entry"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors whitespace-nowrap shrink-0"
+              >
+                <Mic className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Voice AI</span>
               </button>
             )}
 

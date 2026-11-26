@@ -39,6 +39,24 @@
           "type": "number",
           "description": "Overall monthly spending limit in user currency."
         },
+        "openingBankBalance": {
+          "type": "number",
+          "description": "User-entered opening or in-hand balance in Bank / UPI accounts."
+        },
+        "openingCashBalance": {
+          "type": "number",
+          "description": "User-entered opening or in-hand physical cash balance."
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "deactivated"],
+          "description": "Account lifecycle status controlled exclusively by verified admin."
+        },
+        "deactivatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when account was deactivated, or null when active."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -534,6 +552,51 @@
         }
       },
       "required": ["enabled", "updatedAt"]
+    },
+    "AdminMessage": {
+      "title": "AdminMessage",
+      "description": "Pop-up message sent by the verified FinTrack administrator to a user account.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "senderEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "isRead": {
+          "type": "boolean"
+        },
+        "readAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "heading", "message", "senderEmail", "isRead", "readAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -576,6 +639,10 @@
     "/users/{userId}/recurringTransactions/{recurringId}": {
       "schema": { "$ref": "#/entities/RecurringTransaction" },
       "description": "Scheduled recurring income and expense templates."
+    },
+    "/users/{userId}/adminMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/AdminMessage" },
+      "description": "Important administrative pop-up messages sent to user accounts."
     }
   }
 }

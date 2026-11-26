@@ -3,10 +3,12 @@ import {
   BudgetRecord,
   CurrencyCode,
   DebtRecord,
+  RecordPayment,
   RecurringTransaction,
   SavingsGoal,
   TransactionRecord,
 } from '../types/finance';
+import { isCashPaymentMethod } from './constants';
 import {
   formatCurrency,
   getCurrentMonthStr,
@@ -715,6 +717,9 @@ export function computeMonthlyExpenseForecast(
 }
 
 export interface SavingsAndCashSummary {
+  openingBankBalance: number;
+  openingCashBalance: number;
+  openingTotal: number;
   allIncome: number;
   allExpenses: number;
   baseCashBalance: number;
@@ -729,8 +734,14 @@ export interface SavingsAndCashSummary {
 export function computeSavingsAndCashSummary(
   transactions: TransactionRecord[],
   savingsGoals: SavingsGoal[],
-  debtRecords: DebtRecord[]
+  debtRecords: DebtRecord[],
+  openingBankBalance = 0,
+  openingCashBalance = 0
 ): SavingsAndCashSummary {
+  const safeBankOpen = Math.max(0, Number(openingBankBalance) || 0);
+  const safeCashOpen = Math.max(0, Number(openingCashBalance) || 0);
+  const openingTotal = safeBankOpen + safeCashOpen;
+
   const allIncome = transactions
     .filter((t) => t.type === 'income')
     .reduce((s, t) => s + t.amount, 0);
@@ -755,11 +766,14 @@ export function computeSavingsAndCashSummary(
     .reduce((s, d) => s + Math.max(0, d.paidAmount), 0);
 
   const netDebtCashImpact = debtRecoveredIn - debtPaidOut;
-  const currentBalance = baseCashBalance + netDebtCashImpact;
+  const currentBalance = openingTotal + baseCashBalance + netDebtCashImpact;
   const goalSavings = savingsGoals.reduce((s, g) => s + g.savedAmount, 0);
   const totalSavingRightNow = currentBalance + goalSavings;
 
   return {
+    openingBankBalance: safeBankOpen,
+    openingCashBalance: safeCashOpen,
+    openingTotal,
     allIncome,
     allExpenses,
     baseCashBalance,
@@ -771,4 +785,108 @@ export function computeSavingsAndCashSummary(
     totalSavingRightNow,
   };
 }
+
+export interface WalletBalancesSummary {
+  openingBankBalance: number;
+  openingCashBalance: number;
+  bankIncome: number;
+  bankExpenses: number;
+  bankDebtIn: number;
+  bankDebtOut: number;
+  bankBalance: number;
+  cashIncome: number;
+  cashExpenses: number;
+  cashDebtIn: number;
+  cashDebtOut: number;
+  cashBalance: number;
+  combinedBalance: number;
+}
+
+export function computeWalletBalances(
+  transactions: TransactionRecord[],
+  debtRecords: DebtRecord[],
+  recordPayments: RecordPayment[],
+  openingBankBalance = 0,
+  openingCashBalance = 0
+): WalletBalancesSummary {
+  const safeBankOpen = Math.max(0, Number(openingBankBalance) || 0);
+  const safeCashOpen = Math.max(0, Number(openingCashBalance) || 0);
+
+  let bankIncome = 0;
+  let bankExpenses = 0;
+  let cashIncome = 0;
+  let cashExpenses = 0;
+
+  for (const t of transactions) {
+    if (isCashPaymentMethod(t.paymentMethod)) {
+      if (t.type === 'income') cashIncome += t.amount;
+      else cashExpenses += t.amount;
+    } else {
+      if (t.type === 'income') bankIncome += t.amount;
+      else bankExpenses += t.amount;
+    }
+  }
+
+  const debtMap = new Map<string, DebtRecord>();
+  let totalRecoveredIn = 0;
+  let totalPaidOut = 0;
+  for (const d of debtRecords) {
+    debtMap.set(d.id, d);
+    if (d.recordType === 'lent' || d.recordType === 'receivable') {
+      totalRecoveredIn += Math.max(0, d.paidAmount);
+    } else {
+      totalPaidOut += Math.max(0, d.paidAmount);
+    }
+  }
+
+  let bankDebtIn = 0;
+  let cashDebtIn = 0;
+  let bankDebtOut = 0;
+  let cashDebtOut = 0;
+
+  for (const p of recordPayments) {
+    if (p.parentKind !== 'debt') continue;
+    const debt = debtMap.get(p.parentId);
+    if (!debt) continue;
+    const isReceivable = debt.recordType === 'lent' || debt.recordType === 'receivable';
+    const isCash = isCashPaymentMethod(p.method);
+    if (isReceivable) {
+      if (isCash) cashDebtIn += p.amount;
+      else bankDebtIn += p.amount;
+    } else {
+      if (isCash) cashDebtOut += p.amount;
+      else bankDebtOut += p.amount;
+    }
+  }
+
+  // Attribute any legacy/initial paidAmount without a payment entry to Bank/UPI so combinedBalance matches currentBalance
+  const loggedIn = bankDebtIn + cashDebtIn;
+  if (totalRecoveredIn > loggedIn) {
+    bankDebtIn += totalRecoveredIn - loggedIn;
+  }
+  const loggedOut = bankDebtOut + cashDebtOut;
+  if (totalPaidOut > loggedOut) {
+    bankDebtOut += totalPaidOut - loggedOut;
+  }
+
+  const bankBalance = safeBankOpen + bankIncome - bankExpenses + bankDebtIn - bankDebtOut;
+  const cashBalance = safeCashOpen + cashIncome - cashExpenses + cashDebtIn - cashDebtOut;
+
+  return {
+    openingBankBalance: safeBankOpen,
+    openingCashBalance: safeCashOpen,
+    bankIncome,
+    bankExpenses,
+    bankDebtIn,
+    bankDebtOut,
+    bankBalance,
+    cashIncome,
+    cashExpenses,
+    cashDebtIn,
+    cashDebtOut,
+    cashBalance,
+    combinedBalance: bankBalance + cashBalance,
+  };
+}
+
 

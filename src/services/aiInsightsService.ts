@@ -7,6 +7,7 @@ import {
   SanitizedFinancialSnapshot,
   SavingsGoal,
   TransactionRecord,
+  VoiceParsedTransaction,
 } from '../types/finance';
 import { buildMonthlySeries } from '../utils/analytics';
 import {
@@ -307,5 +308,30 @@ export async function sendAIChatMessage(params: {
     model: string;
     answer: string;
     answeredAt: string;
+  };
+}
+
+export async function parseVoiceTransaction(params: {
+  audioBase64?: string;
+  mimeType?: string;
+  transcriptText?: string;
+  localDate: string;
+  localTime: string;
+}): Promise<{ model: string; transaction: VoiceParsedTransaction }> {
+  const res = await fetch('/api/ai/voice-transaction', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+
+  return (await res.json()) as {
+    model: string;
+    transaction: VoiceParsedTransaction;
   };
 }

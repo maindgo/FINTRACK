@@ -1,6 +1,6 @@
 {
   "name": "FinTrack – Smart Money Manager",
   "description": "All-in-one personal finance management platform for tracking income, expenses, profit & loss, savings goals, budgets, loans, bills, recurring transactions, and financial insights.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

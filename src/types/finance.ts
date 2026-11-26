@@ -16,6 +16,8 @@ export type NavSection =
   | 'reports'
   | 'insights'
   | 'ai-insights'
+  | 'vip'
+  | 'admin'
   | 'settings';
 
 export type IncomeCategory =
@@ -59,6 +61,8 @@ export type BillType = 'bill' | 'emi' | 'subscription';
 export type BillFrequency = 'one_time' | 'monthly' | 'quarterly' | 'yearly';
 export type RecurringFrequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+export type AccountStatus = 'active' | 'deactivated';
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -66,6 +70,10 @@ export interface UserProfile {
   currency: CurrencyCode;
   theme: ThemeMode;
   monthlyBudgetLimit: number;
+  openingBankBalance?: number;
+  openingCashBalance?: number;
+  accountStatus?: AccountStatus;
+  deactivatedAt?: Timestamp | null;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
@@ -361,4 +369,29 @@ export interface AIChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+}
+
+export interface VoiceParsedTransaction {
+  transcript: string;
+  type: TransactionType;
+  amount: number;
+  title: string;
+  category: IncomeCategory | ExpenseCategory;
+  paymentMethod: PaymentMethod;
+  date: string;
+  time: string;
+  description: string;
+  missingAmountReason: string;
+}
+
+export interface AdminMessage {
+  id: string;
+  userId: string;
+  heading: string;
+  message: string;
+  senderEmail: string;
+  isRead: boolean;
+  readAt?: Timestamp | null;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
 }

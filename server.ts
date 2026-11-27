@@ -1242,9 +1242,78 @@ async function startServer(): Promise<void> {
     (process.env.NODE_ENV !== 'production' && !fs.existsSync(distIndex));
 
   if (useViteDev) {
+    app.get('/@vite/client', (_req: Request, res: Response) => {
+      res.type('application/javascript');
+      res.send(`
+const sheetsMap = new Map();
+let lastInsertedStyle;
+
+export function updateStyle(id, content) {
+  let style = sheetsMap.get(id);
+  if (!style) {
+    style = document.createElement('style');
+    style.setAttribute('type', 'text/css');
+    style.setAttribute('data-vite-dev-id', id);
+    style.textContent = content;
+    if (!lastInsertedStyle) {
+      document.head.appendChild(style);
+      setTimeout(() => {
+        lastInsertedStyle = undefined;
+      }, 0);
+    } else {
+      lastInsertedStyle.insertAdjacentElement('afterend', style);
+    }
+    lastInsertedStyle = style;
+  } else if (style.textContent !== content) {
+    style.textContent = content;
+  }
+  sheetsMap.set(id, style);
+}
+
+export function removeStyle(id) {
+  const style = sheetsMap.get(id);
+  if (style) {
+    document.head.removeChild(style);
+    sheetsMap.delete(id);
+  }
+}
+
+export function createHotContext() {
+  return {
+    data: {},
+    accept() {},
+    acceptExports() {},
+    dispose() {},
+    prune() {},
+    invalidate() {},
+    decline() {},
+    on() {},
+    off() {},
+    send() {},
+  };
+}
+
+export function injectQuery(url, queryToInject) {
+  if (typeof url !== 'string' || (url[0] !== '.' && url[0] !== '/')) return url;
+  const [pathname, search] = url.split('?');
+  const [cleanSearch, hash] = (search || '').split('#');
+  const query = cleanSearch ? \`\${cleanSearch}&\${queryToInject}\` : queryToInject;
+  return \`\${pathname}?\${query}\${hash ? \`#\${hash}\` : ''}\`;
+}
+
+export class ErrorOverlay {
+  constructor() {}
+}
+`);
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        ws: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

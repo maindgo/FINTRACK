@@ -496,10 +496,237 @@ const ALLOWED_AUDIO_MIME_TYPES = new Set([
   'audio/m4a',
   'audio/ogg',
   'audio/wav',
+  'audio/x-wav',
   'audio/mpeg',
+  'audio/mp3',
   'audio/aac',
+  'audio/flac',
   'audio/3gpp',
+  'audio/3gpp2',
+  'audio/amr',
+  'video/webm',
 ]);
+
+const HINDI_WORD_NUMBERS: Record<string, number> = {
+  ek: 1,
+  one: 1,
+  do: 2,
+  two: 2,
+  teen: 3,
+  three: 3,
+  char: 4,
+  chaar: 4,
+  four: 4,
+  paanch: 5,
+  panch: 5,
+  five: 5,
+  chhe: 6,
+  che: 6,
+  six: 6,
+  saat: 7,
+  seven: 7,
+  aath: 8,
+  eight: 8,
+  nau: 9,
+  nine: 9,
+  das: 10,
+  ten: 10,
+  gyarah: 11,
+  barah: 12,
+  pandrah: 15,
+  fifteen: 15,
+  bees: 20,
+  twenty: 20,
+  pachees: 25,
+  tees: 30,
+  thirty: 30,
+  chalees: 40,
+  forty: 40,
+  pachaas: 50,
+  pachas: 50,
+  fifty: 50,
+  saath: 60,
+  sixty: 60,
+  sattar: 70,
+  seventy: 70,
+  assi: 80,
+  eighty: 80,
+  nabbe: 90,
+  ninety: 90,
+  sau: 100,
+  hundred: 100,
+  dedh: 150,
+  dhai: 250,
+  hazaar: 1000,
+  hajar: 1000,
+  thousand: 1000,
+  lakh: 100000,
+  lac: 100000,
+};
+
+function extractAmountFromSpeech(text: string): number {
+  const normalized = text.replace(/,/g, '').toLowerCase();
+  // Match numeric values (including 2.5k, 1500, 240.50)
+  const kMatch = normalized.match(/\b(\d+(?:\.\d+)?)\s*k\b/i);
+  if (kMatch) {
+    const val = Number(kMatch[1]) * 1000;
+    if (Number.isFinite(val) && val > 0) return Number(val.toFixed(2));
+  }
+  const numMatch = normalized.match(/\b(\d+(?:\.\d{1,2})?)\b/);
+  if (numMatch) {
+    const val = Number(numMatch[1]);
+    if (Number.isFinite(val) && val > 0) return Number(val.toFixed(2));
+  }
+
+  // Fallback: Hindi/Hinglish/English word numbers (e.g. "paanch sau", "do hazaar", "dedh sau")
+  const tokens = normalized.split(/\s+/);
+  let total = 0;
+  let current = 0;
+  let foundWordNumber = false;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i].replace(/[^\p{L}]/gu, '');
+    const val = HINDI_WORD_NUMBERS[tok];
+    if (val === undefined) continue;
+    foundWordNumber = true;
+    if (val === 150 || val === 250) {
+      const nextTok = (tokens[i + 1] || '').replace(/[^\p{L}]/gu, '');
+      if (nextTok === 'sau' || nextTok === 'hundred') {
+        current += val;
+        i += 1;
+      } else if (nextTok === 'hazaar' || nextTok === 'hajar' || nextTok === 'thousand') {
+        total += val * 10;
+        i += 1;
+      } else {
+        current += val;
+      }
+    } else if (val === 100) {
+      current = (current || 1) * 100;
+    } else if (val >= 1000) {
+      total += (current || 1) * val;
+      current = 0;
+    } else {
+      current += val;
+    }
+  }
+  const sum = total + current;
+  return foundWordNumber && sum > 0 ? sum : 0;
+}
+
+function shiftDateDays(isoDate: string, deltaDays: number): string {
+  const parts = isoDate.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return isoDate;
+  const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2] + deltaDays));
+  return dt.toISOString().slice(0, 10);
+}
+
+function parseVoiceTranscriptFallback(
+  transcript: string,
+  fallbackDate: string,
+  fallbackTime: string
+): Record<string, unknown> {
+  const lower = transcript.toLowerCase();
+  const amount = extractAmountFromSpeech(transcript);
+
+  const incomePattern =
+    /\b(received|receive|earned|earn|salary|tankhwa|income|refund|credited|credit|bonus|freelance|freelancing|interest|dividend|mili|mila|mile|aaya|aayi|aaye|kamai|kamaaya|recibido|reçu|erhalten|recebido)\b/i;
+  const type = incomePattern.test(lower) ? 'income' : 'expense';
+
+  let paymentMethod = 'UPI';
+  if (/\b(cash|nakad|nagad|notes|efectivo|espèces|bargeld)\b/i.test(lower)) {
+    paymentMethod = 'Cash';
+  } else if (/\b(credit\s*card|cc)\b/i.test(lower)) {
+    paymentMethod = 'Credit Card';
+  } else if (/\b(debit\s*card|atm)\b/i.test(lower)) {
+    paymentMethod = 'Debit Card';
+  } else if (/\b(bank|neft|imps|rtgs|transfer|account|khata|wire)\b/i.test(lower)) {
+    paymentMethod = 'Bank Transfer';
+  } else if (/\b(net\s*banking)\b/i.test(lower)) {
+    paymentMethod = 'Net Banking';
+  } else if (/\b(wallet)\b/i.test(lower)) {
+    paymentMethod = 'Wallet';
+  } else if (/\b(upi|gpay|google\s*pay|phonepe|paytm|bhim|qr)\b/i.test(lower)) {
+    paymentMethod = 'UPI';
+  }
+
+  let category = type === 'income' ? 'Other Income' : 'Other Expenses';
+  if (type === 'income') {
+    if (/\b(salary|tankhwa|wage|paycheck|sueldo|salaire)\b/i.test(lower)) category = 'Salary';
+    else if (/\b(freelanc|client|project|gig)\b/i.test(lower)) category = 'Freelancing';
+    else if (/\b(business|shop|dukaan|sales|vyapar)\b/i.test(lower)) category = 'Business Income';
+    else if (/\b(interest|byaj)\b/i.test(lower)) category = 'Interest';
+    else if (/\b(invest|dividend|mutual|stock|sip)\b/i.test(lower)) category = 'Investments';
+    else if (/\b(online|youtube|affiliate)\b/i.test(lower)) category = 'Online Earnings';
+  } else {
+    if (/\b(food|lunch|dinner|breakfast|chai|tea|coffee|samosa|snack|zomato|swiggy|restaurant|khana|nashta|biryani|pizza|burger|meal|grocery|groceries|kirana|sabzi|milk|doodh|paneer|roti|comida|almuerzo)\b/i.test(lower)) {
+      category = 'Food';
+    } else if (/\b(auto|rickshaw|cab|uber|ola|rapido|metro|bus|petrol|diesel|fuel|train|ticket|parking|toll|transport|commute)\b/i.test(lower)) {
+      category = 'Transport';
+    } else if (/\b(rent|kiraya|lease)\b/i.test(lower)) {
+      category = 'Rent';
+    } else if (/\b(electric|electricity|bijli|power\s*bill)\b/i.test(lower)) {
+      category = 'Electricity';
+    } else if (/\b(internet|wifi|broadband|recharge|jio|airtel|vi|mobile\s*bill)\b/i.test(lower)) {
+      category = 'Internet';
+    } else if (/\b(doctor|medicine|dawai|medical|hospital|clinic|pharmacy|health|checkup)\b/i.test(lower)) {
+      category = 'Healthcare';
+    } else if (/\b(school|college|tuition|course|book|books|exam|fees|education)\b/i.test(lower)) {
+      category = 'Education';
+    } else if (/\b(movie|netflix|prime|spotify|game|concert|party|entertainment)\b/i.test(lower)) {
+      category = 'Entertainment';
+    } else if (/\b(flight|hotel|trip|vacation|travel|yatra)\b/i.test(lower)) {
+      category = 'Travel';
+    } else if (/\b(emi|loan|installment|kist)\b/i.test(lower)) {
+      category = 'EMI';
+    } else if (/\b(bill|water|gas|cylinder|dth|maintenance)\b/i.test(lower)) {
+      category = 'Bills';
+    } else if (/\b(shop|shopping|amazon|flipkart|myntra|clothes|kapde|shoes|mall|market|gift)\b/i.test(lower)) {
+      category = 'Shopping';
+    }
+  }
+
+  let date = fallbackDate;
+  if (/\b(yesterday|beeta\s*kal|kal\s*raat|ayer|hier|gestern)\b/i.test(lower)) {
+    date = shiftDateDays(fallbackDate, -1);
+  }
+
+  const cleanedTitle = transcript
+    .replace(/\b(\d+(?:,\d+)*(?:\.\d+)?\s*k?)\b/gi, '')
+    .replace(/\b(rs\.?|inr|rupees?|rupaye|rupaya|bucks|dollars?|usd|eur|euros?|gbp|paid|spent|spend|for|on|via|by|from|using|with|se|ke|ki|ka|ko|par|pe|mein|me|maine|diya|diye|kharch|kiye|kiya|liya|mila|mili|received|aaj|today|yesterday)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const title = cleanedTitle
+    ? cleanedTitle.slice(0, 60).replace(/^\w/, (c) => c.toUpperCase())
+    : type === 'income'
+    ? `${category} Received`
+    : `${category} Expense`;
+
+  return {
+    transcript,
+    type,
+    amount,
+    title,
+    category,
+    paymentMethod,
+    date,
+    time: fallbackTime,
+    description: transcript.slice(0, 200),
+    missingAmountReason:
+      amount > 0 ? '' : 'No monetary amount was detected. Please enter the amount below.',
+  };
+}
+
+function mapVoiceGeminiError(err: unknown): { status: number; code: string; message: string } {
+  const mapped = mapGeminiError(err);
+  if (mapped.code === 'AI_REQUEST_FAILED') {
+    return {
+      ...mapped,
+      message:
+        'Voice AI could not reach Gemini right now. Please try Browser Live Dictation or type your entry below.',
+    };
+  }
+  return mapped;
+}
 
 const VOICE_TRANSACTION_SCHEMA = {
   type: Type.OBJECT,
@@ -589,10 +816,10 @@ async function startServer(): Promise<void> {
   app.set('trust proxy', 1);
 
   const json128kb = express.json({ limit: '128kb' });
-  const json2mb = express.json({ limit: '2mb' });
+  const json4mb = express.json({ limit: '4mb' });
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.path === '/api/ai/voice-transaction') {
-      json2mb(req, res, next);
+      json4mb(req, res, next);
     } else {
       json128kb(req, res, next);
     }
@@ -781,19 +1008,13 @@ async function startServer(): Promise<void> {
 
   app.post('/api/ai/voice-transaction', aiRateLimiter, async (req: Request, res: Response) => {
     const ai = getGeminiClient();
-    if (!ai) {
-      res.status(503).json({
-        error:
-          'GEMINI_API_KEY is not configured yet. Add GEMINI_API_KEY in Settings > Secrets to use Voice AI transaction entry.',
-        code: 'MISSING_API_KEY',
-      });
-      return;
-    }
 
     const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
       audioBase64?: unknown;
       mimeType?: unknown;
       transcriptText?: unknown;
+      languageHint?: unknown;
+      languageLabel?: unknown;
       localDate?: unknown;
       localTime?: unknown;
     };
@@ -806,8 +1027,11 @@ async function startServer(): Promise<void> {
     const timeFallback = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : '12:00';
 
     const transcriptText = sanitizeText(body.transcriptText, 600);
+    const languageHint = sanitizeText(body.languageHint, 32);
+    const languageLabel = sanitizeText(body.languageLabel, 80);
     const audioBase64 = typeof body.audioBase64 === 'string' ? body.audioBase64.trim() : '';
-    const baseMime = sanitizeText(body.mimeType, 80).split(';')[0].trim().toLowerCase();
+    const rawBaseMime = sanitizeText(body.mimeType, 80).split(';')[0].trim().toLowerCase();
+    const baseMime = rawBaseMime === 'video/webm' ? 'audio/webm' : rawBaseMime;
 
     if (!audioBase64 && !transcriptText) {
       res.status(400).json({
@@ -818,14 +1042,14 @@ async function startServer(): Promise<void> {
     }
 
     if (audioBase64) {
-      if (!ALLOWED_AUDIO_MIME_TYPES.has(baseMime)) {
+      if (!ALLOWED_AUDIO_MIME_TYPES.has(rawBaseMime)) {
         res.status(400).json({
-          error: 'Unsupported audio recording format. Please try again or type your entry.',
+          error: 'Unsupported audio recording format. Please try Browser Live Dictation or type your entry.',
           code: 'UNSUPPORTED_AUDIO_FORMAT',
         });
         return;
       }
-      if (audioBase64.length > 1_800_000 || !/^[A-Za-z0-9+/=]+$/.test(audioBase64)) {
+      if (audioBase64.length > 3_200_000 || !/^[A-Za-z0-9+/=]+$/.test(audioBase64)) {
         res.status(400).json({
           error: 'Voice recording is too large or invalid. Please keep recordings under 15 seconds.',
           code: 'AUDIO_TOO_LARGE',
@@ -834,42 +1058,121 @@ async function startServer(): Promise<void> {
       }
     }
 
-    const instructionPrompt = [
-      'Extract a personal finance transaction from the user voice audio or text into strict JSON.',
-      `Reference Today Date: ${todayFallback}. Reference Current Time: ${timeFallback}.`,
-      `Allowed type values: "income" or "expense". Default to "expense" unless user explicitly says received/earned/salary/refund/credited/income.`,
-      `Allowed income categories: ${ALLOWED_INCOME_CATEGORIES.join(', ')}.`,
-      `Allowed expense categories: ${ALLOWED_EXPENSE_CATEGORIES.join(', ')}.`,
-      `Allowed paymentMethod values: ${ALLOWED_PAYMENT_METHODS.join(', ')}. Map PhonePe/GPay/Paytm/BHIM/UPI/QR to "UPI"; NEFT/IMPS/RTGS/Bank to "Bank Transfer"; Cash/notes to "Cash"; Card/Credit/Debit accordingly.`,
-      'If user says "yesterday", subtract 1 day from Reference Today Date. Otherwise use Reference Today Date unless a specific date is stated.',
-      'Set transcript to an accurate verbatim transcription of what the user said (or the provided text).',
-      'If no numeric monetary amount is spoken, set amount to 0 and explain briefly in missingAmountReason.',
-      transcriptText ? `Spoken/Typed input: "${transcriptText}"` : 'Listen carefully to the attached audio clip.',
-    ].join('\n');
+    // If GEMINI_API_KEY is missing, parse transcriptText cleanly via multilingual fallback
+    if (!ai) {
+      if (transcriptText) {
+        const fallbackTx = normalizeVoiceTransaction(
+          parseVoiceTranscriptFallback(transcriptText, todayFallback, timeFallback),
+          todayFallback,
+          timeFallback
+        );
+        res.json({ model: 'local-multilingual-fallback', transaction: fallbackTx });
+        return;
+      }
+      res.status(503).json({
+        error:
+          'GEMINI_API_KEY is not configured yet for audio transcription. Use Browser Live Dictation or type your entry below.',
+        code: 'MISSING_API_KEY',
+      });
+      return;
+    }
+
+    const langContext =
+      languageLabel && languageHint && languageHint !== 'auto'
+        ? `User preferred spoken language/region: ${languageLabel} (${languageHint}). Also support mixed English/Hinglish or any other spoken language.`
+        : 'Auto-detect ANY spoken language worldwide (including English, Hindi, Hinglish, all Indian regional languages, and all international languages).';
+
+    const buildInstructionPrompt = (textInput: string) =>
+      [
+        'Extract a personal finance transaction from the user spoken/typed input into strict JSON.',
+        langContext,
+        `Reference Today Date: ${todayFallback}. Reference Current Time: ${timeFallback}.`,
+        `Allowed type values: "income" or "expense". Default to "expense" unless user indicates received/earned/salary/refund/credited/income (or equivalents like "mila", "aaya", "recibido", "reçu", etc.).`,
+        `Allowed income categories: ${ALLOWED_INCOME_CATEGORIES.join(', ')}.`,
+        `Allowed expense categories: ${ALLOWED_EXPENSE_CATEGORIES.join(', ')}.`,
+        `Allowed paymentMethod values: ${ALLOWED_PAYMENT_METHODS.join(', ')}. Map PhonePe/GPay/Google Pay/Paytm/BHIM/UPI/QR to "UPI"; NEFT/IMPS/RTGS/Bank/Transfer/Khata to "Bank Transfer"; Cash/Nakad/Efectivo to "Cash"; Credit/Debit cards accordingly.`,
+        'Understand spoken number words in Hindi/Hinglish (e.g., "paanch sau"=500, "dedh sau"=150, "dhai sau"=250, "do hazaar"=2000) and all world languages.',
+        'If the user mentions yesterday (e.g., "yesterday", "kal" in past context, "ayer", "hier", "gestern"), subtract 1 day from Reference Today Date.',
+        'Keep "transcript" in the original spoken words/language. Write a concise clean "title" and "description" (in English or natural merchant form).',
+        'If no numeric monetary amount is spoken, set amount to 0 and explain briefly in missingAmountReason.',
+        textInput
+          ? `Spoken/Typed input: "${textInput}"`
+          : 'Listen carefully to the attached audio clip and extract the transaction.',
+      ].join('\n');
+
+    let resolvedTranscript = transcriptText;
+    let modelUsed = GEMINI_MODEL;
+
+    // Step 1: When audio is sent, transcribe first with dedicated gemini-3.5-transcribe model
+    if (audioBase64 && !resolvedTranscript) {
+      try {
+        const transcribeResp = await ai.models.generateContent({
+          model: 'gemini-3.5-transcribe',
+          contents: {
+            parts: [
+              { inlineData: { mimeType: baseMime, data: audioBase64 } },
+              {
+                text: `Transcribe this short financial voice note verbatim in the exact language or dialect spoken (including Hinglish, Hindi, regional Indian languages, or any world language). ${langContext} Return only the spoken text.`,
+              },
+            ],
+          },
+        });
+        const transcribed = sanitizeText(transcribeResp.text || '', 600);
+        if (transcribed) {
+          resolvedTranscript = transcribed;
+        }
+      } catch {
+        // Fall through to multimodal gemini-4-hydrogen below
+      }
+    }
 
     try {
-      const contents = audioBase64
-        ? [
-            { text: instructionPrompt },
-            { inlineData: { mimeType: baseMime, data: audioBase64 } },
-          ]
-        : instructionPrompt;
+      let rawText = '';
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents,
-        config: {
-          systemInstruction:
-            'You are FinTrack Voice AI Parser. Convert short spoken Indian personal finance notes (English, Hindi, or Hinglish) into clean structured JSON.',
-          responseMimeType: 'application/json',
-          responseSchema: VOICE_TRANSACTION_SCHEMA,
-        },
-      });
+      if (resolvedTranscript) {
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: buildInstructionPrompt(resolvedTranscript),
+          config: {
+            systemInstruction:
+              'You are FinTrack Multilingual Voice AI Parser. Convert personal finance phrases from ANY language or country worldwide (including English, Hindi, Hinglish, Marathi, Gujarati, Bengali, Tamil, Telugu, Spanish, French, German, Arabic, Japanese, etc.) into clean structured JSON.',
+            responseMimeType: 'application/json',
+            responseSchema: VOICE_TRANSACTION_SCHEMA,
+          },
+        });
+        rawText = (response.text || '').trim();
+      } else if (audioBase64) {
+        // Direct multimodal audio fallback with gemini-4-hydrogen if gemini-3.5-transcribe returned empty
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODEL,
+          contents: {
+            parts: [
+              { inlineData: { mimeType: baseMime, data: audioBase64 } },
+              { text: buildInstructionPrompt('') },
+            ],
+          },
+          config: {
+            systemInstruction:
+              'You are FinTrack Multilingual Voice AI Parser. Listen to audio in ANY language worldwide (including English, Hindi, Hinglish, all Indian languages, and all international languages) and output clean structured JSON.',
+            responseMimeType: 'application/json',
+            responseSchema: VOICE_TRANSACTION_SCHEMA,
+          },
+        });
+        rawText = (response.text || '').trim();
+      }
 
-      const rawText = (response.text || '').trim();
       if (!rawText) {
+        if (resolvedTranscript) {
+          const fallbackTx = normalizeVoiceTransaction(
+            parseVoiceTranscriptFallback(resolvedTranscript, todayFallback, timeFallback),
+            todayFallback,
+            timeFallback
+          );
+          res.json({ model: 'local-multilingual-fallback', transaction: fallbackTx });
+          return;
+        }
         res.status(502).json({
-          error: 'Gemini returned an empty response for your voice clip. Please try again.',
+          error: 'Could not hear speech clearly in the recording. Please try speaking closer to the mic or use Live Dictation.',
           code: 'EMPTY_RESPONSE',
         });
         return;
@@ -884,6 +1187,15 @@ async function startServer(): Promise<void> {
       try {
         parsedRaw = JSON.parse(cleanedJson);
       } catch {
+        if (resolvedTranscript) {
+          const fallbackTx = normalizeVoiceTransaction(
+            parseVoiceTranscriptFallback(resolvedTranscript, todayFallback, timeFallback),
+            todayFallback,
+            timeFallback
+          );
+          res.json({ model: 'local-multilingual-fallback', transaction: fallbackTx });
+          return;
+        }
         res.status(502).json({
           error: 'Could not parse the voice transaction cleanly. Please try speaking again.',
           code: 'INVALID_JSON_RESPONSE',
@@ -895,14 +1207,30 @@ async function startServer(): Promise<void> {
         parsedRaw && typeof parsedRaw === 'object' && !Array.isArray(parsedRaw)
           ? (parsedRaw as Record<string, unknown>)
           : {};
+      if (resolvedTranscript && !parsedObj.transcript) {
+        parsedObj.transcript = resolvedTranscript;
+      }
       const transaction = normalizeVoiceTransaction(parsedObj, todayFallback, timeFallback);
 
       res.json({
-        model: GEMINI_MODEL,
+        model: modelUsed,
         transaction,
       });
     } catch (err: unknown) {
-      const mapped = mapGeminiError(err);
+      // If we have a transcript (from Browser Live Dictation, typing, or gemini-3.5-transcribe), never fail the user on a transient Gemini error
+      if (resolvedTranscript) {
+        const fallbackTx = normalizeVoiceTransaction(
+          parseVoiceTranscriptFallback(resolvedTranscript, todayFallback, timeFallback),
+          todayFallback,
+          timeFallback
+        );
+        res.json({
+          model: 'local-multilingual-fallback',
+          transaction: fallbackTx,
+        });
+        return;
+      }
+      const mapped = mapVoiceGeminiError(err);
       res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
     }
   });

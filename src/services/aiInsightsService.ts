@@ -315,6 +315,8 @@ export async function parseVoiceTransaction(params: {
   audioBase64?: string;
   mimeType?: string;
   transcriptText?: string;
+  languageHint?: string;
+  languageLabel?: string;
   localDate: string;
   localTime: string;
 }): Promise<{ model: string; transaction: VoiceParsedTransaction }> {

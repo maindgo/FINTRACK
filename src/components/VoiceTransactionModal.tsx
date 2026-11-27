@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
+  ExternalLink,
+  Globe2,
   Landmark,
   Loader2,
   Mic,
@@ -64,6 +66,58 @@ interface BrowserSpeechRecognition {
   stop: () => void;
 }
 
+const VOICE_LANG_STORAGE_KEY = 'fintrack_voice_lang';
+
+interface VoiceLanguageOption {
+  code: string;
+  label: string;
+  group: 'Auto' | 'India & Hinglish' | 'Global & Countries';
+}
+
+const VOICE_LANGUAGES: VoiceLanguageOption[] = [
+  { code: 'auto', label: 'Auto-Detect (All Languages & Hinglish)', group: 'Auto' },
+  { code: 'en-IN', label: 'Hinglish / English (India)', group: 'India & Hinglish' },
+  { code: 'hi-IN', label: 'Hindi (हिन्दी)', group: 'India & Hinglish' },
+  { code: 'mr-IN', label: 'Marathi (मराठी)', group: 'India & Hinglish' },
+  { code: 'gu-IN', label: 'Gujarati (ગુજરાતી)', group: 'India & Hinglish' },
+  { code: 'bn-IN', label: 'Bengali (বাংলা)', group: 'India & Hinglish' },
+  { code: 'ta-IN', label: 'Tamil (தமிழ்)', group: 'India & Hinglish' },
+  { code: 'te-IN', label: 'Telugu (తెలుగు)', group: 'India & Hinglish' },
+  { code: 'kn-IN', label: 'Kannada (ಕನ್ನಡ)', group: 'India & Hinglish' },
+  { code: 'ml-IN', label: 'Malayalam (മലയാളം)', group: 'India & Hinglish' },
+  { code: 'pa-IN', label: 'Punjabi (ਪੰਜਾਬੀ)', group: 'India & Hinglish' },
+  { code: 'ur-IN', label: 'Urdu (اردو)', group: 'India & Hinglish' },
+  { code: 'en-US', label: 'English (United States)', group: 'Global & Countries' },
+  { code: 'en-GB', label: 'English (United Kingdom)', group: 'Global & Countries' },
+  { code: 'en-AU', label: 'English (Australia)', group: 'Global & Countries' },
+  { code: 'en-CA', label: 'English (Canada)', group: 'Global & Countries' },
+  { code: 'es-ES', label: 'Spanish (Spain)', group: 'Global & Countries' },
+  { code: 'es-MX', label: 'Spanish (Latin America / Mexico)', group: 'Global & Countries' },
+  { code: 'fr-FR', label: 'French (France)', group: 'Global & Countries' },
+  { code: 'fr-CA', label: 'French (Canada)', group: 'Global & Countries' },
+  { code: 'de-DE', label: 'German (Germany / DACH)', group: 'Global & Countries' },
+  { code: 'it-IT', label: 'Italian (Italy)', group: 'Global & Countries' },
+  { code: 'pt-BR', label: 'Portuguese (Brazil)', group: 'Global & Countries' },
+  { code: 'pt-PT', label: 'Portuguese (Portugal)', group: 'Global & Countries' },
+  { code: 'ar-SA', label: 'Arabic (Middle East / GCC)', group: 'Global & Countries' },
+  { code: 'ar-AE', label: 'Arabic (UAE)', group: 'Global & Countries' },
+  { code: 'ja-JP', label: 'Japanese (Japan)', group: 'Global & Countries' },
+  { code: 'ko-KR', label: 'Korean (South Korea)', group: 'Global & Countries' },
+  { code: 'zh-CN', label: 'Chinese Mandarin (China)', group: 'Global & Countries' },
+  { code: 'zh-TW', label: 'Chinese Traditional (Taiwan)', group: 'Global & Countries' },
+  { code: 'id-ID', label: 'Indonesian (Indonesia)', group: 'Global & Countries' },
+  { code: 'ms-MY', label: 'Malay (Malaysia)', group: 'Global & Countries' },
+  { code: 'th-TH', label: 'Thai (Thailand)', group: 'Global & Countries' },
+  { code: 'vi-VN', label: 'Vietnamese (Vietnam)', group: 'Global & Countries' },
+  { code: 'tr-TR', label: 'Turkish (Turkey)', group: 'Global & Countries' },
+  { code: 'ru-RU', label: 'Russian (Russia / CIS)', group: 'Global & Countries' },
+  { code: 'nl-NL', label: 'Dutch (Netherlands / Belgium)', group: 'Global & Countries' },
+  { code: 'pl-PL', label: 'Polish (Poland)', group: 'Global & Countries' },
+  { code: 'sv-SE', label: 'Swedish (Sweden)', group: 'Global & Countries' },
+  { code: 'sw-KE', label: 'Swahili (East Africa)', group: 'Global & Countries' },
+  { code: 'fil-PH', label: 'Filipino / Tagalog (Philippines)', group: 'Global & Countries' },
+];
+
 function getSpeechRecognitionCtor(): (new () => BrowserSpeechRecognition) | null {
   if (typeof window === 'undefined') return null;
   const win = window as unknown as {
@@ -81,6 +135,8 @@ function pickSupportedAudioMime(): string {
     'audio/mp4',
     'audio/ogg;codecs=opus',
     'audio/ogg',
+    'audio/aac',
+    'audio/wav',
   ];
   for (const c of candidates) {
     if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(c)) {
@@ -90,11 +146,29 @@ function pickSupportedAudioMime(): string {
   return '';
 }
 
+async function acquireMicrophoneStream(): Promise<MediaStream> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  } catch (err) {
+    const name = (err as { name?: string })?.name || '';
+    if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError' || name === 'TypeError') {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw err;
+  }
+}
+
 function describeMicError(err: unknown): string {
   const name = (err as { name?: string })?.name || '';
   const msg = ((err as { message?: string })?.message || '').toLowerCase();
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || msg.includes('denied') || msg.includes('not allowed')) {
-    return 'Microphone access was blocked. Click the lock/camera icon in your browser address bar, set Microphone to "Allow", then tap Retry — or use Live Dictation / Type below.';
+    return 'Microphone access was blocked. Click the lock icon in your browser address bar, set Microphone to "Allow", then tap Retry — or open in a new tab / use Live Dictation.';
   }
   if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || msg.includes('not found')) {
     return 'No microphone was detected on this device. Please connect a microphone or type your transaction below.';
@@ -105,7 +179,7 @@ function describeMicError(err: unknown): string {
   if (name === 'SecurityError') {
     return 'Microphone requires a secure HTTPS connection. Please open FinTrack over HTTPS or type your entry below.';
   }
-  return 'Could not start microphone recording. Check browser microphone permissions or type your phrase below.';
+  return 'Could not start microphone recording. Check browser microphone permissions, use Live Dictation, or type your phrase below.';
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
@@ -163,6 +237,23 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
   const [undoing, setUndoing] = useState(false);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>('checking');
   const [dictating, setDictating] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<string>(() => {
+    try {
+      return localStorage.getItem(VOICE_LANG_STORAGE_KEY) || 'auto';
+    } catch {
+      return 'auto';
+    }
+  });
+
+  const isEmbeddedIframe =
+    typeof window !== 'undefined' &&
+    (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -322,6 +413,18 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
     }
   };
 
+  const selectedLangOption =
+    VOICE_LANGUAGES.find((l) => l.code === voiceLang) || VOICE_LANGUAGES[0];
+
+  const handleLanguageChange = (newLang: string) => {
+    setVoiceLang(newLang);
+    try {
+      localStorage.setItem(VOICE_LANG_STORAGE_KEY, newLang);
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   const submitVoicePayload = async (payload: {
     audioBase64?: string;
     mimeType?: string;
@@ -333,6 +436,8 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
     try {
       const res = await parseVoiceTransaction({
         ...payload,
+        languageHint: selectedLangOption.code,
+        languageLabel: selectedLangOption.label,
         localDate: getTodayStr(),
         localTime: getCurrentTimeStr(),
       });
@@ -360,7 +465,7 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await acquireMicrophoneStream();
       stream.getTracks().forEach((t) => t.stop());
       setMicPermission('granted');
     } catch (err) {
@@ -378,7 +483,9 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
 
     try {
       const rec = new SpeechRec();
-      rec.lang = 'en-IN';
+      const browserLocale =
+        typeof navigator !== 'undefined' && navigator.language ? navigator.language : 'en-IN';
+      rec.lang = voiceLang === 'auto' ? browserLocale : voiceLang;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
       rec.continuous = false;
@@ -404,8 +511,12 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
           setError(
             'Microphone access was blocked by the browser. Click the site lock icon in the address bar to allow Microphone, or type your transaction below.'
           );
+        } else if (ev.error === 'language-not-supported') {
+          setError(
+            `Browser live dictation does not support ${selectedLangOption.label} directly. Use the main Voice Recorder button above or type your entry below.`
+          );
         } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
-          setError('Live speech recognition stopped. You can retry microphone or type your phrase below.');
+          setError('Live dictation stopped. You can use the main Voice Recorder above or type your phrase below.');
         }
       };
 
@@ -458,7 +569,7 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await acquireMicrophoneStream();
       setMicPermission('granted');
       if (stream.getAudioTracks().length === 0) {
         stream.getTracks().forEach((t) => t.stop());
@@ -487,27 +598,42 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
         }
       };
 
+      recorder.onerror = () => {
+        stopTracks();
+        setRecording(false);
+        setError(
+          'Your browser encountered an audio recording error. Please try again, use Browser Live Dictation, or type your entry below.'
+        );
+      };
+
       recorder.onstop = async () => {
-        const mimeUsed = recorder.mimeType || preferredMime || 'audio/webm';
-        const audioBlob = new Blob(chunksRef.current, { type: mimeUsed });
+        const rawMime = recorder.mimeType || preferredMime || 'audio/webm';
+        const cleanMime = rawMime.split(';')[0].trim().toLowerCase() || 'audio/webm';
+        const audioBlob = new Blob(chunksRef.current, { type: cleanMime });
+        const chunkCount = chunksRef.current.length;
         stopTracks();
         setRecording(false);
 
         if (canceledOnCloseRef.current) return;
-        if (audioBlob.size < 400) {
-          setError('Recording was too short. Please hold or speak for at least 1–2 seconds.');
+        if (chunkCount === 0 || audioBlob.size < 120) {
+          setError('No audio was captured. Speak clearly for at least 1–2 seconds, or try Browser Live Dictation.');
           return;
         }
 
         try {
           const audioBase64 = await blobToBase64(audioBlob);
-          await submitVoicePayload({ audioBase64, mimeType: mimeUsed });
+          await submitVoicePayload({ audioBase64, mimeType: cleanMime });
         } catch (err) {
           setError((err as Error)?.message || 'Unable to process recorded audio.');
         }
       };
 
-      recorder.start();
+      // Use a 250ms timeslice so short clips reliably flush chunks on Chrome, Android, and iOS Safari
+      try {
+        recorder.start(250);
+      } catch {
+        recorder.start();
+      }
       setRecording(true);
       setRecordSeconds(0);
 
@@ -534,6 +660,11 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.requestData();
+      } catch {
+        // ignore if unsupported
+      }
       mediaRecorderRef.current.stop();
     }
   };
@@ -621,7 +752,7 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
                 Voice AI Transaction Entry
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Speak naturally in English or Hindi to auto-record income or expenses
+                Speak in any language worldwide — English, Hinglish, Hindi, regional & international
               </p>
             </div>
           </div>
@@ -665,9 +796,48 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
             </button>
           </div>
 
+          {/* Language & Country Dialect Selector */}
+          {!savedRecord && !hasDraft && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300 shrink-0">
+                <Globe2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>Voice Language</span>
+              </div>
+              <select
+                value={voiceLang}
+                onChange={(e) => handleLanguageChange(e.target.value)}
+                disabled={recording || processing || dictating}
+                aria-label="Voice language and country"
+                className="w-full sm:w-64 px-2.5 py-1.5 text-xs rounded-md bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+              >
+                <optgroup label="Auto (Recommended)">
+                  {VOICE_LANGUAGES.filter((l) => l.group === 'Auto').map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="India & Hinglish">
+                  {VOICE_LANGUAGES.filter((l) => l.group === 'India & Hinglish').map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Global & Countries">
+                  {VOICE_LANGUAGES.filter((l) => l.group === 'Global & Countries').map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.label}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+          )}
+
           {/* Microphone Permission Banner */}
           {!savedRecord && !hasDraft && (
-            <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2 text-xs min-w-0">
                 {micPermission === 'granted' ? (
                   <>
@@ -680,7 +850,7 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
                   <>
                     <MicOff className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                     <span className="text-amber-800 dark:text-amber-300">
-                      Microphone blocked — click Allow in browser site settings
+                      Microphone blocked — allow mic in site settings
                     </span>
                   </>
                 ) : micPermission === 'unsupported' ? (
@@ -700,15 +870,28 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
                 )}
               </div>
 
-              {(micPermission === 'prompt' || micPermission === 'denied') && (
-                <button
-                  type="button"
-                  onClick={requestMicPermissionOnly}
-                  className="px-2.5 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 whitespace-nowrap shrink-0"
-                >
-                  {micPermission === 'denied' ? 'Retry Access' : 'Allow Mic'}
-                </button>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {micPermission === 'denied' && isEmbeddedIframe && typeof window !== 'undefined' && (
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-[11px] font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>New Tab</span>
+                  </a>
+                )}
+                {(micPermission === 'prompt' || micPermission === 'denied') && (
+                  <button
+                    type="button"
+                    onClick={requestMicPermissionOnly}
+                    className="px-2.5 py-1 rounded-md bg-emerald-600 text-white text-[11px] font-semibold hover:bg-emerald-700 whitespace-nowrap"
+                  >
+                    {micPermission === 'denied' ? 'Retry Access' : 'Allow Mic'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -742,10 +925,10 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
                     ? `Listening... ${recordSeconds}s / ${MAX_RECORD_SECONDS}s (Tap to stop)`
                     : dictating
                     ? 'Dictating live... Speak clearly'
-                    : 'Tap microphone & speak your transaction'}
+                    : 'Tap microphone & speak in any language'}
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
-                  Example: &ldquo;Paid ₹240 for lunch by UPI&rdquo; or &ldquo;Spent 150 cash for auto&rdquo; or &ldquo;Received 12000 freelancing by bank transfer&rdquo;
+                  Example: &ldquo;Paid ₹240 for lunch by UPI&rdquo; &bull; &ldquo;Aaj 500 rupaye chai aur auto pe kharch kiye&rdquo; &bull; &ldquo;Received 12000 salary&rdquo;
                 </p>
               </div>
 
@@ -767,8 +950,21 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
           )}
 
           {error && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300">
-              {error}
+            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300 space-y-2">
+              <div>{error}</div>
+              {isEmbeddedIframe && micPermission === 'denied' && typeof window !== 'undefined' && (
+                <div>
+                  <a
+                    href={window.location.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-semibold underline hover:opacity-80"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Open FinTrack in a full browser tab</span>
+                  </a>
+                </div>
+              )}
             </div>
           )}
 

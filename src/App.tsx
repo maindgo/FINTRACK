@@ -306,7 +306,7 @@ function FinTrackWorkspace() {
       {resolvedSection === 'bills-emis' && <BillsEmisPage />}
       {resolvedSection === 'reports' && <ReportsPage />}
       {resolvedSection === 'insights' && <InsightsPage />}
-      {resolvedSection === 'ai-insights' && <AIInsightsPage />}
+      {resolvedSection === 'ai-insights' && <AIInsightsPage onNavigate={setActiveSection} />}
       {resolvedSection === 'vip' && <VipPage onNavigate={setActiveSection} />}
       {resolvedSection === 'admin' && isAdmin && <AdminPage />}
       {resolvedSection === 'settings' && <SettingsPage />}

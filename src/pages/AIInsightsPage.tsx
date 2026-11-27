@@ -14,13 +14,16 @@ import {
 import {
   AlertTriangle,
   ArrowDownRight,
+  ArrowLeft,
   ArrowUpRight,
+  BarChart3,
   Bot,
   CheckCircle2,
   Clock,
   Info,
   Lightbulb,
   Loader2,
+  Mail,
   PiggyBank,
   RefreshCw,
   Send,
@@ -31,6 +34,7 @@ import {
   TrendingUp,
   User as UserIcon,
   Wallet,
+  Wrench,
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
 import {
@@ -39,8 +43,15 @@ import {
   fetchAIInsights,
   sendAIChatMessage,
 } from '../services/aiInsightsService';
-import { AIChatMessage, GeminiAIInsightsResult } from '../types/finance';
+import { AIChatMessage, GeminiAIInsightsResult, NavSection } from '../types/finance';
+import { SUPPORT_EMAIL } from '../utils/constants';
 import { formatCurrency } from '../utils/formatters';
+
+const AI_INSIGHTS_MAINTENANCE_MODE = true;
+
+interface AIInsightsPageProps {
+  onNavigate?: (section: NavSection) => void;
+}
 
 const STARTER_QUESTIONS = [
   'How much did I spend on food this month?',
@@ -90,7 +101,7 @@ function getPriorityStyle(priority: string): string {
   return 'text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700';
 }
 
-export function AIInsightsPage() {
+export function AIInsightsPage({ onNavigate }: AIInsightsPageProps) {
   const {
     transactions,
     budgets,
@@ -142,7 +153,7 @@ export function AIInsightsPage() {
   }, [snapshot]);
 
   const loadInsights = useCallback(async () => {
-    if (!hasTransactions) {
+    if (AI_INSIGHTS_MAINTENANCE_MODE || !hasTransactions) {
       setAiResult(null);
       setInsightsError('');
       return;
@@ -166,6 +177,9 @@ export function AIInsightsPage() {
   }, [hasTransactions, snapshot]);
 
   useEffect(() => {
+    if (AI_INSIGHTS_MAINTENANCE_MODE) {
+      return;
+    }
     if (!hasTransactions) {
       lastAutoFetchedKeyRef.current = '';
       setAiResult(null);
@@ -251,6 +265,128 @@ export function AIInsightsPage() {
   }, [snapshot.categoryBreakdown]);
 
   const { monthlySummary } = snapshot;
+
+  if (AI_INSIGHTS_MAINTENANCE_MODE) {
+    const marqueeNotice =
+      'Sorry for the inconvenience — AI Insights are currently unavailable due to some technical issues. We are working to fix them and improve your experience.';
+    return (
+      <div className="space-y-6">
+        {/* Right-to-Left Scrolling Maintenance Notice Banner */}
+        <div
+          role="region"
+          aria-label="AI Insights maintenance notice banner"
+          className="w-full rounded-xl bg-slate-900 dark:bg-slate-900/95 text-slate-100 border border-slate-800 overflow-hidden py-2.5 select-none"
+        >
+          <div className="animate-marquee-rtl">
+            <span className="inline-flex items-center gap-3 px-6 text-xs sm:text-sm font-medium tracking-wide whitespace-nowrap">
+              <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{marqueeNotice}</span>
+              <span className="text-slate-600 mx-4" aria-hidden="true">
+                •
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-3 px-6 text-xs sm:text-sm font-medium tracking-wide whitespace-nowrap">
+              <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{marqueeNotice}</span>
+              <span className="text-slate-600 mx-4" aria-hidden="true">
+                •
+              </span>
+            </span>
+          </div>
+        </div>
+
+        {/* Page Header */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              AI Financial Insights
+            </h2>
+          </div>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Service status and maintenance update for AI-powered financial analysis.
+          </p>
+        </div>
+
+        {/* Main Maintenance Card */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-sm max-w-3xl space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+            <div className="w-12 h-12 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0">
+              <Wrench className="w-6 h-6" />
+            </div>
+            <div className="space-y-2 flex-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                Under Maintenance
+              </div>
+              <h3 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+                AI Insights Are Currently Unavailable
+              </h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+                Sorry for the inconvenience — AI Insights are currently unavailable because there are some technical issues with that. We are actively working to fix the issue and restore full service shortly.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 p-4 flex items-start gap-3 text-xs text-slate-600 dark:text-slate-300">
+            <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 leading-relaxed">
+              <div className="font-semibold text-slate-900 dark:text-white">
+                Your financial data is safe and other features continue working normally
+              </div>
+              <p>
+                You can continue tracking income, expenses, budgets, savings goals, and viewing your charts in Insights &amp; Analytics without interruption.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-300">
+              <Mail className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+              <span>
+                Need help or want to report an issue? Contact{' '}
+                <a
+                  href={`mailto:${SUPPORT_EMAIL}`}
+                  className="font-semibold text-emerald-700 dark:text-emerald-400 underline"
+                >
+                  {SUPPORT_EMAIL}
+                </a>
+                .
+              </span>
+            </div>
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-white dark:hover:bg-slate-800 whitespace-nowrap self-start sm:self-auto shrink-0"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              Contact Support
+            </a>
+          </div>
+
+          {onNavigate && (
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => onNavigate('insights')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 transition-opacity"
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>Open Insights &amp; Analytics</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('dashboard')}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Back to Dashboard</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

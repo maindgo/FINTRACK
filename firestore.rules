@@ -444,7 +444,7 @@ service cloud.firestore {
 
     function isValidVipPaymentRequest(data) {
       return data.keys().hasAll(['userId', 'userEmail', 'displayName', 'tier', 'billingCycle', 'amountInr', 'upiId', 'paymentReference', 'utrReference', 'paymentMethodLabel', 'status', 'adminNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['userId', 'userEmail', 'displayName', 'tier', 'billingCycle', 'amountInr', 'upiId', 'paymentReference', 'utrReference', 'paymentMethodLabel', 'status', 'adminNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'userEmail', 'displayName', 'tier', 'billingCycle', 'amountInr', 'upiId', 'paymentReference', 'utrReference', 'paymentMethodLabel', 'withoutUtr', 'screenshotName', 'screenshotDataUrl', 'status', 'adminNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
         && isValidId(data.userId)
         && data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 160
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
@@ -455,8 +455,12 @@ service cloud.firestore {
         && data.upiId == 'tntmilan06@slc'
         && data.paymentReference is string && data.paymentReference.size() >= 6 && data.paymentReference.size() <= 64
         && data.paymentReference.matches('^FTPAY-[a-zA-Z0-9_\\-]+$')
-        && data.utrReference is string && data.utrReference.size() >= 4 && data.utrReference.size() <= 64
+        && data.utrReference is string && data.utrReference.size() <= 64
+        && (('withoutUtr' in data && data.withoutUtr == true) || data.utrReference.size() >= 4)
+        && (!('withoutUtr' in data) || data.withoutUtr is bool)
         && data.paymentMethodLabel is string && data.paymentMethodLabel.size() >= 2 && data.paymentMethodLabel.size() <= 60
+        && (!('screenshotName' in data) || (data.screenshotName is string && data.screenshotName.size() <= 160))
+        && (!('screenshotDataUrl' in data) || (data.screenshotDataUrl is string && data.screenshotDataUrl.size() <= 250000))
         && data.status in ['pending', 'approved', 'rejected']
         && data.adminNote is string && data.adminNote.size() <= 500
         && data.reviewedBy is string && data.reviewedBy.size() <= 160
@@ -962,14 +966,24 @@ service cloud.firestore {
       allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isMaintenanceAdmin();
       allow create: if isValidId(requestId)
         && isValidVipPaymentRequest(incoming())
-        && isVerifiedOwner(incoming().userId)
-        && isActiveAccount(incoming().userId)
-        && incoming().status == 'pending'
-        && incoming().adminNote == ''
-        && incoming().reviewedBy == ''
-        && incoming().reviewedAt == null
         && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isVerifiedOwner(incoming().userId)
+            && isActiveAccount(incoming().userId)
+            && incoming().status == 'pending'
+            && incoming().adminNote == ''
+            && incoming().reviewedBy == ''
+            && incoming().reviewedAt == null
+          ) || (
+            isMaintenanceAdmin()
+            && incoming().status == 'approved'
+            && ('withoutUtr' in incoming() && incoming().withoutUtr == true)
+            && incoming().reviewedBy == 'maind.go2000@gmail.com'
+            && incoming().reviewedAt == request.time
+          )
+        );
       allow update: if isMaintenanceAdmin()
         && isValidId(requestId)
         && isValidVipPaymentRequest(incoming())

@@ -39,17 +39,24 @@ interface SecuredRequest extends Request {
 
 function createSecurityMiddleware(options: SecurityGuardOptions) {
   return async (req: SecuredRequest, res: Response, next: NextFunction): Promise<void> => {
-    const guard = await verifyCallerSecurityAccess(
-      req.headers as Record<string, string | string[] | undefined>,
-      req.ip || 'unknown',
-      options
-    );
-    if (guard.allowed === false) {
-      res.status(guard.status).json(guard.body);
-      return;
+    try {
+      const guard = await verifyCallerSecurityAccess(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip || 'unknown',
+        options
+      );
+      if (guard.allowed === false) {
+        res.status(guard.status).json(guard.body);
+        return;
+      }
+      req.verifiedSecurity = guard;
+      next();
+    } catch (err) {
+      res.status(500).json({
+        error: (err as Error)?.message || 'Security verification failed unexpectedly.',
+        code: 'SECURITY_CHECK_ERROR',
+      });
     }
-    req.verifiedSecurity = guard;
-    next();
   };
 }
 
@@ -87,10 +94,13 @@ async function startServer(): Promise<void> {
   app.set('trust proxy', 1);
 
   const json128kb = express.json({ limit: '128kb' });
+  const json1mb = express.json({ limit: '1mb' });
   const json4mb = express.json({ limit: '4mb' });
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.path === '/api/ai/voice-transaction') {
       json4mb(req, res, next);
+    } else if (req.path === '/api/vip/subscribe') {
+      json1mb(req, res, next);
     } else {
       json128kb(req, res, next);
     }
@@ -177,8 +187,15 @@ async function startServer(): Promise<void> {
         res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHORIZED' });
         return;
       }
-      const result = await handleVipSubscribe(req.body, req.verifiedSecurity);
-      res.status(result.status).json(result.body);
+      try {
+        const result = await handleVipSubscribe(req.body, req.verifiedSecurity);
+        res.status(result.status).json(result.body);
+      } catch (err) {
+        res.status(500).json({
+          error: (err as Error)?.message || 'Unable to process VIP subscription request.',
+          code: 'VIP_SUBSCRIBE_ERROR',
+        });
+      }
     }
   );
 

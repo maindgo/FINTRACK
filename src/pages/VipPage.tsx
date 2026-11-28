@@ -11,14 +11,18 @@ import {
   Copy,
   CreditCard,
   Crown,
+  Download,
   ExternalLink,
   Headphones,
+  Image as ImageIcon,
   Loader2,
   Mail,
   MessageSquareText,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Trash2,
+  Upload,
   X,
   Zap,
 } from 'lucide-react';
@@ -28,11 +32,12 @@ import {
   buildUpiPaymentUri,
   cancelVipSubscription,
   generateVipPaymentReference,
-  subscribeVipPlan,
   verifyBackendVipEntitlement,
 } from '../services/aiInsightsService';
+import { createVipPaymentRequest } from '../services/firestoreService';
 import { BillingCycle, NavSection, VipTier } from '../types/finance';
 import { SUPPORT_EMAIL, VIP_UPI_ID } from '../utils/constants';
+import { compressImageFile } from '../utils/formatters';
 import {
   BILLING_CYCLE_LABELS,
   getTierPrice,
@@ -192,6 +197,15 @@ export function VipPage({ onNavigate }: VipPageProps) {
   const [checkoutStep, setCheckoutStep] = useState<'pay' | 'confirm'>('pay');
   const [checkoutPaymentRef, setCheckoutPaymentRef] = useState<string>('');
   const [utrInput, setUtrInput] = useState<string>('');
+  const [withoutUtr, setWithoutUtr] = useState(false);
+  const [screenshotName, setScreenshotName] = useState<string>('');
+  const [screenshotDataUrl, setScreenshotDataUrl] = useState<string>('');
+  const [processingScreenshot, setProcessingScreenshot] = useState(false);
+  const [previewScreenshot, setPreviewScreenshot] = useState<{
+    title: string;
+    name: string;
+    dataUrl: string;
+  } | null>(null);
   const [copiedUpi, setCopiedUpi] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [submittingCheckout, setSubmittingCheckout] = useState(false);
@@ -256,6 +270,9 @@ export function VipPage({ onNavigate }: VipPageProps) {
     }
     setCheckoutPaymentRef(generateVipPaymentReference());
     setUtrInput('');
+    setWithoutUtr(false);
+    setScreenshotName('');
+    setScreenshotDataUrl('');
     setCopiedUpi(false);
     setCheckoutStep('pay');
     setCheckoutTier(tier);
@@ -287,44 +304,86 @@ export function VipPage({ onNavigate }: VipPageProps) {
     window.location.href = activeUpiDeepLink;
   };
 
+  const handleScreenshotFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setCheckoutError('Please upload an image screenshot (PNG, JPG, or WebP).');
+      return;
+    }
+    setProcessingScreenshot(true);
+    setCheckoutError('');
+    try {
+      const compressed = await compressImageFile(file, 180000);
+      setScreenshotName(file.name.slice(0, 160));
+      setScreenshotDataUrl(compressed);
+    } catch (err: unknown) {
+      setCheckoutError((err as Error)?.message || 'Unable to process payment screenshot.');
+    } finally {
+      setProcessingScreenshot(false);
+    }
+  };
+
   const handleSubmitPaymentForAdminReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!checkoutTier) return;
-    const trimmedUtr = utrInput.trim();
-    if (trimmedUtr.length < 4) {
+    const trimmedUtr = withoutUtr ? '' : utrInput.trim();
+    if (!withoutUtr && trimmedUtr.length < 4 && !screenshotDataUrl) {
       setCheckoutError(
-        'Please enter your UPI Transaction ID / UTR Reference (at least 4 characters) so the Admin can verify your payment.'
+        'Please enter your UPI Transaction ID / UTR Reference (at least 4 characters), attach a payment screenshot, or enable "Submit without UTR".'
       );
       return;
     }
+
+    const effectiveWithoutUtr = withoutUtr || trimmedUtr.length < 4;
 
     setSubmittingCheckout(true);
     setCheckoutError('');
     setStatusMessage(null);
     try {
-      const priceInr = getTierPrice(checkoutTier, selectedCycle);
-      const res = await subscribeVipPlan({
+      const res = await createVipPaymentRequest({
         tier: checkoutTier,
         billingCycle: selectedCycle,
-        submittedPriceInr: priceInr,
         paymentReference: checkoutPaymentRef,
         utrReference: trimmedUtr,
-        paymentMethodLabel: `UPI (${VIP_UPI_ID})`,
+        withoutUtr: effectiveWithoutUtr,
+        screenshotName: screenshotName || undefined,
+        screenshotDataUrl: screenshotDataUrl || undefined,
+        paymentMethodLabel: effectiveWithoutUtr
+          ? `UPI Without UTR (${VIP_UPI_ID})`
+          : `UPI (${VIP_UPI_ID})`,
         displayName: profile?.displayName || firebaseUser?.displayName || '',
       });
       const targetSpec = VIP_TIER_CONFIGS[checkoutTier];
+      const refSummary = res.utrReference
+        ? `Ref: ${res.paymentReference} · UTR: ${res.utrReference}`
+        : `Ref: ${res.paymentReference} · Submitted without UTR${screenshotDataUrl ? ' + Screenshot' : ''}`;
       setStatusMessage({
         type: 'pending',
-        text: `UPI payment request submitted for ${targetSpec.classLabel} — ${targetSpec.name} (₹${res.amountInr}). Notification sent to the Admin Panel—your VIP features will unlock only after Admin confirmation.`,
-        ref: `Ref: ${res.paymentReference} · UTR: ${res.utrReference}`,
+        text: `UPI payment request submitted for ${targetSpec.classLabel} — ${targetSpec.name} (₹${res.amountInr}). Notification sent to the Admin Panel—your VIP features will unlock after Admin confirmation.`,
+        ref: refSummary,
       });
       setCheckoutTier(null);
       setUtrInput('');
+      setWithoutUtr(false);
+      setScreenshotName('');
+      setScreenshotDataUrl('');
     } catch (err: unknown) {
-      const msg =
+      let msg =
         err instanceof AIInsightsApiError
           ? err.message
           : (err as Error)?.message || 'Unable to submit payment verification request.';
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed && typeof parsed.error === 'string' && parsed.error) {
+          msg = parsed.error.toLowerCase().includes('permission')
+            ? 'Permission denied while submitting request. Please refresh or contact support if your account is restricted.'
+            : parsed.error;
+        }
+      } catch {
+        // non-JSON message
+      }
       setCheckoutError(msg);
     } finally {
       setSubmittingCheckout(false);
@@ -431,8 +490,27 @@ export function VipPage({ onNavigate }: VipPageProps) {
                       ₹{req.amountInr}
                     </span>
                   </div>
-                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                    UTR: {req.utrReference} · Ref: {req.paymentReference}
+                  <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-2">
+                    <span>
+                      {req.utrReference ? `UTR: ${req.utrReference}` : 'Without UTR'} · Ref:{' '}
+                      {req.paymentReference}
+                    </span>
+                    {req.screenshotDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPreviewScreenshot({
+                            title: `${reqSpec.classLabel} · ${reqSpec.name} (${req.paymentReference})`,
+                            name: req.screenshotName || 'payment-screenshot.jpg',
+                            dataUrl: req.screenshotDataUrl || '',
+                          })
+                        }
+                        className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 underline font-sans font-semibold"
+                      >
+                        <ImageIcon className="w-3 h-3" />
+                        <span>Screenshot</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -943,8 +1021,34 @@ export function VipPage({ onNavigate }: VipPageProps) {
                         ₹{req.amountInr}
                       </td>
                       <td className="py-3 px-4 font-mono text-[11px] text-slate-600 dark:text-slate-300">
-                        <div>{req.utrReference}</div>
-                        <div className="text-slate-400">{req.paymentReference}</div>
+                        <div>
+                          {req.utrReference ? (
+                            req.utrReference
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-sans font-medium">
+                              Without UTR
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-slate-400 flex flex-wrap items-center gap-2 mt-0.5">
+                          <span>{req.paymentReference}</span>
+                          {req.screenshotDataUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewScreenshot({
+                                  title: `${tierSpec.classLabel} · ${tierSpec.name} (${req.paymentReference})`,
+                                  name: req.screenshotName || 'payment-screenshot.jpg',
+                                  dataUrl: req.screenshotDataUrl || '',
+                                })
+                              }
+                              className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 hover:underline font-sans font-semibold"
+                            >
+                              <ImageIcon className="w-3 h-3" />
+                              <span>View Screenshot</span>
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         {req.status === 'approved' ? (
@@ -1106,7 +1210,7 @@ export function VipPage({ onNavigate }: VipPageProps) {
                     }}
                     className="w-full px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
                   >
-                    Already Paid to {VIP_UPI_ID}? Enter UTR Reference
+                    Already Paid to {VIP_UPI_ID}? Submit Confirmation / Screenshot
                   </button>
 
                   <button
@@ -1122,7 +1226,7 @@ export function VipPage({ onNavigate }: VipPageProps) {
               <form onSubmit={handleSubmitPaymentForAdminReview} className="space-y-4">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-600 dark:text-slate-300 font-medium">
-                    Step 2 of 2: Enter UPI Transaction ID / UTR
+                    Step 2 of 2: Payment Proof for Admin Review
                   </span>
                   <a
                     href={activeUpiDeepLink}
@@ -1133,27 +1237,111 @@ export function VipPage({ onNavigate }: VipPageProps) {
                   </a>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="vip-utr-input"
-                    className="block text-xs font-medium text-slate-700 dark:text-slate-300"
-                  >
-                    UPI Transaction ID / 12-Digit UTR *
-                  </label>
+                {/* Optional Without-UTR Toggle */}
+                <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 cursor-pointer">
                   <input
-                    id="vip-utr-input"
-                    type="text"
-                    required
-                    minLength={4}
-                    maxLength={64}
-                    value={utrInput}
-                    onChange={(e) => setUtrInput(e.target.value)}
-                    placeholder="e.g. 432198765432 or UPI Ref ID"
-                    className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+                    type="checkbox"
+                    checked={withoutUtr}
+                    onChange={(e) => {
+                      setWithoutUtr(e.target.checked);
+                      setCheckoutError('');
+                    }}
+                    className="mt-0.5 rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-600"
                   />
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Found in your UPI app payment receipt. Sent directly to Admin for confirmation or rejection.
-                  </p>
+                  <div className="text-xs space-y-0.5">
+                    <div className="font-semibold text-slate-900 dark:text-white">
+                      Submit without UTR reference
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Don&apos;t have the UTR number handy? Submit your request directly for Admin review (attach a screenshot below if available).
+                    </p>
+                  </div>
+                </label>
+
+                {!withoutUtr && (
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="vip-utr-input"
+                      className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+                    >
+                      UPI Transaction ID / 12-Digit UTR{' '}
+                      {screenshotDataUrl ? '(Optional with screenshot)' : '*'}
+                    </label>
+                    <input
+                      id="vip-utr-input"
+                      type="text"
+                      required={!withoutUtr && !screenshotDataUrl}
+                      maxLength={64}
+                      value={utrInput}
+                      onChange={(e) => setUtrInput(e.target.value)}
+                      placeholder="e.g. 432198765432 or UPI Ref ID"
+                      className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+                    />
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Found in your UPI app payment receipt. Sent directly to Admin for confirmation or rejection.
+                    </p>
+                  </div>
+                )}
+
+                {/* Optional Payment Screenshot Upload */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-slate-700 dark:text-slate-300">
+                      Payment Screenshot (Optional)
+                    </span>
+                    {screenshotDataUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScreenshotName('');
+                          setScreenshotDataUrl('');
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400 hover:underline"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {screenshotDataUrl ? (
+                    <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-2.5 flex items-center gap-3">
+                      <img
+                        src={screenshotDataUrl}
+                        alt={screenshotName || 'Payment screenshot'}
+                        className="w-14 h-14 rounded object-cover border border-slate-200 dark:border-slate-800 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1 space-y-0.5 text-xs">
+                        <div className="font-medium text-slate-900 dark:text-white truncate">
+                          {screenshotName || 'payment-screenshot.jpg'}
+                        </div>
+                        <div className="text-[11px] text-emerald-600 dark:text-emerald-400">
+                          Ready to attach for Admin review
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-2 px-3 py-3 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 hover:bg-slate-100 dark:hover:bg-slate-900 cursor-pointer text-xs text-slate-600 dark:text-slate-300 transition-colors">
+                      {processingScreenshot ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+                          <span>Compressing screenshot...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 text-slate-400" />
+                          <span>Attach Payment Screenshot (Optional, PNG/JPG)</span>
+                        </>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={processingScreenshot || submittingCheckout}
+                        onChange={(e) => void handleScreenshotFileChange(e)}
+                        className="sr-only"
+                      />
+                    </label>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-1">
@@ -1167,7 +1355,11 @@ export function VipPage({ onNavigate }: VipPageProps) {
                   </button>
                   <button
                     type="submit"
-                    disabled={submittingCheckout || utrInput.trim().length < 4}
+                    disabled={
+                      submittingCheckout ||
+                      processingScreenshot ||
+                      (!withoutUtr && utrInput.trim().length < 4 && !screenshotDataUrl)
+                    }
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50"
                   >
                     {submittingCheckout && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -1180,6 +1372,49 @@ export function VipPage({ onNavigate }: VipPageProps) {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Payment Screenshot Preview Modal */}
+      {previewScreenshot && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-xl">
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                  {previewScreenshot.name}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  {previewScreenshot.title}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewScreenshot.dataUrl}
+                  download={previewScreenshot.name}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewScreenshot(null)}
+                  aria-label="Close screenshot preview"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 bg-slate-50 dark:bg-slate-950 flex items-center justify-center max-h-[75vh] overflow-auto">
+              <img
+                src={previewScreenshot.dataUrl}
+                alt={previewScreenshot.name}
+                className="max-w-full max-h-[65vh] rounded-lg border border-slate-200 dark:border-slate-800 object-contain"
+              />
+            </div>
           </div>
         </div>
       )}

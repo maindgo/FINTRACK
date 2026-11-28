@@ -4,10 +4,13 @@ import {
   CheckCircle2,
   Clock,
   Crown,
+  Download,
   Eye,
+  Image as ImageIcon,
   Loader2,
   Megaphone,
   MessageSquarePlus,
+  Plus,
   Search,
   Send,
   Shield,
@@ -16,12 +19,14 @@ import {
   UserMinus,
   Users,
   UserX,
+  X,
   XCircle,
 } from 'lucide-react';
 import { AdminPopupMessageModal } from '../components/AdminPopupMessageModal';
 import { AdminSecurityCenter } from '../components/AdminSecurityCenter';
 import { useFinance } from '../context/FinanceContext';
 import {
+  grantAdminVipWithoutUtr,
   reviewVipPaymentRequest,
   sendAdminPopupMessageToUsers,
   setUserAccountStatus,
@@ -30,13 +35,20 @@ import {
 import {
   AccountStatus,
   AdminMessage,
+  BillingCycle,
   UserProfile,
   VipPaymentRequest,
   VipPaymentRequestStatus,
+  VipTier,
 } from '../types/finance';
 import { ADMIN_EMAIL, DEFAULT_ADMIN_MESSAGE_HEADING, VIP_UPI_ID } from '../utils/constants';
 import { formatCurrency } from '../utils/formatters';
-import { BILLING_CYCLE_LABELS, VIP_TIER_CONFIGS } from '../utils/vipTiers';
+import {
+  BILLING_CYCLE_LABELS,
+  getTierPrice,
+  VIP_TIER_CONFIGS,
+  VIP_TIER_ORDER,
+} from '../utils/vipTiers';
 
 interface AdminPageProps {
   initialSection?: 'users' | 'security' | 'vip-approvals';
@@ -64,6 +76,16 @@ export function AdminPage({ initialSection }: AdminPageProps) {
   const [vipReqSearch, setVipReqSearch] = useState('');
   const [vipNotesMap, setVipNotesMap] = useState<Record<string, string>>({});
   const [reviewingReqId, setReviewingReqId] = useState<string | null>(null);
+  const [previewScreenshotReq, setPreviewScreenshotReq] = useState<VipPaymentRequest | null>(null);
+
+  // Admin "VIP Added without UTR" state
+  const [showGrantWithoutUtr, setShowGrantWithoutUtr] = useState(false);
+  const [grantUserId, setGrantUserId] = useState('');
+  const [grantTier, setGrantTier] = useState<VipTier>('silver');
+  const [grantCycle, setGrantCycle] = useState<BillingCycle>('monthly');
+  const [grantNote, setGrantNote] = useState('');
+  const [grantResetAiQuota, setGrantResetAiQuota] = useState(true);
+  const [grantingVip, setGrantingVip] = useState(false);
 
   // Administrative Pop-Up Message Composer
   const [messageTarget, setMessageTarget] = useState<string>('all');
@@ -258,6 +280,52 @@ export function AdminPage({ initialSection }: AdminPageProps) {
       ]
     : [];
 
+  const eligibleVipUsers = useMemo(
+    () => users.filter((u) => (u.email || '').toLowerCase() !== ADMIN_EMAIL),
+    [users]
+  );
+
+  const handleGrantVipWithoutUtr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setActionMsg('');
+    const targetUser = eligibleVipUsers.find((u) => u.uid === grantUserId);
+    if (!targetUser) {
+      setError('Please select a user account before activating VIP without UTR.');
+      return;
+    }
+    setGrantingVip(true);
+    try {
+      const res = await grantAdminVipWithoutUtr({
+        targetUser,
+        tier: grantTier,
+        billingCycle: grantCycle,
+        adminNote: grantNote,
+        resetAiQuota: grantResetAiQuota,
+      });
+      const tierSpec = VIP_TIER_CONFIGS[grantTier];
+      const cycleSpec = BILLING_CYCLE_LABELS[grantCycle];
+      setActionMsg(
+        `VIP added without UTR: Activated ${tierSpec.classLabel} ${tierSpec.name} (${cycleSpec.label}, ₹${res.amountInr}) for ${targetUser.email} · Ref ${res.paymentReference}.`
+      );
+      setGrantNote('');
+      setShowGrantWithoutUtr(false);
+    } catch (err) {
+      let msg = (err as Error)?.message || 'Unable to activate VIP without UTR.';
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed && typeof parsed.error === 'string' && parsed.error) {
+          msg = parsed.error;
+        }
+      } catch {
+        // plain text error
+      }
+      setError(msg);
+    } finally {
+      setGrantingVip(false);
+    }
+  };
+
   const handleReviewVipPayment = async (
     request: VipPaymentRequest,
     decision: 'approved' | 'rejected'
@@ -273,10 +341,11 @@ export function AdminPage({ initialSection }: AdminPageProps) {
     try {
       await reviewVipPaymentRequest({ request, decision, adminNote: note });
       const tierSpec = VIP_TIER_CONFIGS[request.tier];
+      const utrTag = request.utrReference ? `UTR: ${request.utrReference}` : 'Without UTR';
       setActionMsg(
         decision === 'approved'
-          ? `Confirmed UPI payment (UTR: ${request.utrReference}) and activated ${tierSpec.classLabel} ${tierSpec.name} for ${request.userEmail}.`
-          : `Rejected VIP payment request (UTR: ${request.utrReference}) for ${request.userEmail}. VIP remains locked.`
+          ? `Confirmed UPI payment (${utrTag}) and activated ${tierSpec.classLabel} ${tierSpec.name} for ${request.userEmail}.`
+          : `Rejected VIP payment request (${utrTag}) for ${request.userEmail}. VIP remains locked.`
       );
       setVipNotesMap((prev) => {
         const next = { ...prev };
@@ -284,7 +353,16 @@ export function AdminPage({ initialSection }: AdminPageProps) {
         return next;
       });
     } catch (err) {
-      setError((err as Error)?.message || 'Unable to process VIP payment decision.');
+      let msg = (err as Error)?.message || 'Unable to process VIP payment decision.';
+      try {
+        const parsed = JSON.parse(msg) as { error?: string };
+        if (parsed && typeof parsed.error === 'string' && parsed.error) {
+          msg = parsed.error;
+        }
+      } catch {
+        // plain text error
+      }
+      setError(msg);
     } finally {
       setReviewingReqId(null);
     }
@@ -437,8 +515,8 @@ export function AdminPage({ initialSection }: AdminPageProps) {
             </div>
           )}
 
-          {/* Filter & Search Bar */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          {/* Filter, Search & VIP Added Without UTR Bar */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div className="relative flex-1 max-w-md">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -450,30 +528,192 @@ export function AdminPage({ initialSection }: AdminPageProps) {
               />
             </div>
 
-            <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-fit">
-              {(
-                [
-                  { id: 'pending', label: `Pending (${vipRequestStats.pending})` },
-                  { id: 'approved', label: 'Confirmed' },
-                  { id: 'rejected', label: 'Rejected' },
-                  { id: 'all', label: 'All' },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setVipReqFilter(tab.id)}
-                  className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap ${
-                    vipReqFilter === tab.id
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-fit">
+                {(
+                  [
+                    { id: 'pending', label: `Pending (${vipRequestStats.pending})` },
+                    { id: 'approved', label: 'Confirmed' },
+                    { id: 'rejected', label: 'Rejected' },
+                    { id: 'all', label: 'All' },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setVipReqFilter(tab.id)}
+                    className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap ${
+                      vipReqFilter === tab.id
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGrantWithoutUtr((prev) => !prev);
+                  setError('');
+                }}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                  showGrantWithoutUtr
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-900 dark:text-white'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                }`}
+              >
+                {showGrantWithoutUtr ? (
+                  <>
+                    <X className="w-3.5 h-3.5" />
+                    <span>Close Without-UTR Form</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>VIP Added without UTR</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
+
+          {/* VIP Added Without UTR Form */}
+          {showGrantWithoutUtr && (
+            <form
+              onSubmit={handleGrantVipWithoutUtr}
+              className="bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-800 rounded-xl p-5 space-y-4"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                    <Crown className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      VIP Added Without UTR
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Review a payment manually and activate VIP membership directly for any registered user without requiring a UTR number.
+                    </p>
+                  </div>
+                </div>
+                <span className="font-mono text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                  Plan Value: ₹{getTierPrice(grantTier, grantCycle)}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Select User Account *
+                  </label>
+                  <select
+                    required
+                    value={grantUserId}
+                    onChange={(e) => setGrantUserId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                  >
+                    <option value="">Choose a user...</option>
+                    {eligibleVipUsers.map((u) => (
+                      <option key={u.uid} value={u.uid}>
+                        {u.displayName || 'User'} — {u.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    VIP Tier Class *
+                  </label>
+                  <select
+                    value={grantTier}
+                    onChange={(e) => setGrantTier(e.target.value as VipTier)}
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                  >
+                    {VIP_TIER_ORDER.map((t) => (
+                      <option key={t} value={t}>
+                        {VIP_TIER_CONFIGS[t].classLabel} · {VIP_TIER_CONFIGS[t].name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Billing Cycle *
+                  </label>
+                  <select
+                    value={grantCycle}
+                    onChange={(e) => setGrantCycle(e.target.value as BillingCycle)}
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                  >
+                    {(['monthly', 'quarterly', 'yearly'] as BillingCycle[]).map((cycle) => (
+                      <option key={cycle} value={cycle}>
+                        {BILLING_CYCLE_LABELS[cycle].label} (₹{getTierPrice(grantTier, cycle)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                <div className="md:col-span-8 space-y-1.5">
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    Admin Review Note (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={500}
+                    value={grantNote}
+                    onChange={(e) => setGrantNote(e.target.value)}
+                    placeholder="e.g. Payment verified from UPI app / bank statement without UTR"
+                    className="w-full px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+                  />
+                </div>
+
+                <div className="md:col-span-4 flex items-center pt-5">
+                  <label className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={grantResetAiQuota}
+                      onChange={(e) => setGrantResetAiQuota(e.target.checked)}
+                      className="rounded border-slate-300 dark:border-slate-700 text-emerald-600 focus:ring-emerald-600"
+                    />
+                    <span>Reset monthly AI quota</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={grantingVip}
+                  onClick={() => setShowGrantWithoutUtr(false)}
+                  className="px-3.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={grantingVip || !grantUserId}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {grantingVip ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {grantingVip ? 'Activating VIP...' : 'Confirm & Activate VIP Without UTR'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          )}
 
           {/* Requests List */}
           {filteredVipRequests.length === 0 ? (
@@ -541,10 +781,30 @@ export function AdminPage({ initialSection }: AdminPageProps) {
                           </span>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs pt-0.5">
-                          <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 font-mono text-slate-900 dark:text-white">
-                            UTR / UPI Ref: <strong>{req.utrReference}</strong>
-                          </span>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs pt-0.5">
+                          {req.utrReference ? (
+                            <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 font-mono text-slate-900 dark:text-white">
+                              UTR / UPI Ref: <strong>{req.utrReference}</strong>
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 font-semibold text-amber-800 dark:text-amber-300">
+                              {req.paymentMethodLabel === 'Admin Added (Without UTR)'
+                                ? 'Admin Added (Without UTR)'
+                                : 'Submitted Without UTR'}
+                            </span>
+                          )}
+
+                          {req.screenshotDataUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setPreviewScreenshotReq(req)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-950/60"
+                            >
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              <span>View Payment Screenshot</span>
+                            </button>
+                          )}
+
                           <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
                             Req Ref: {req.paymentReference} · UID: {req.userId}
                           </span>
@@ -1040,6 +1300,52 @@ export function AdminPage({ initialSection }: AdminPageProps) {
         onClosePreview={() => setPreviewPopupOpen(false)}
       />
         </>
+      )}
+
+      {/* Admin VIP Payment Screenshot Lightbox Modal */}
+      {previewScreenshotReq && previewScreenshotReq.screenshotDataUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs">
+          <div className="w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xl">
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                  {previewScreenshotReq.screenshotName || 'Payment Screenshot'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  {previewScreenshotReq.displayName} ({previewScreenshotReq.userEmail}) · ₹{previewScreenshotReq.amountInr} ·{' '}
+                  {previewScreenshotReq.utrReference
+                    ? `UTR: ${previewScreenshotReq.utrReference}`
+                    : 'Submitted Without UTR'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={previewScreenshotReq.screenshotDataUrl}
+                  download={previewScreenshotReq.screenshotName || 'vip-payment-screenshot.jpg'}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewScreenshotReq(null)}
+                  aria-label="Close payment screenshot"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 bg-slate-50 dark:bg-slate-950 flex items-center justify-center max-h-[75vh] overflow-auto">
+              <img
+                src={previewScreenshotReq.screenshotDataUrl}
+                alt={previewScreenshotReq.screenshotName || 'Payment screenshot'}
+                className="max-w-full max-h-[65vh] rounded-lg border border-slate-200 dark:border-slate-800 object-contain"
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -52,6 +52,7 @@ import {
   ADMIN_EMAIL,
   DEFAULT_ADMIN_MESSAGE_HEADING,
   FIELD_LIMITS,
+  VIP_UPI_ID,
 } from '../utils/constants';
 import { BILLING_CYCLE_LABELS, VIP_TIER_CONFIGS } from '../utils/vipTiers';
 import { addFrequencyToDate, getTodayStr } from '../utils/formatters';
@@ -1951,6 +1952,303 @@ export function subscribeAllVipPaymentRequestsForAdmin(
   );
 }
 
+export async function createVipPaymentRequest(params: {
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  paymentReference: string;
+  utrReference?: string;
+  withoutUtr?: boolean;
+  screenshotName?: string;
+  screenshotDataUrl?: string;
+  paymentMethodLabel?: string;
+  displayName?: string;
+}): Promise<{
+  requestId: string;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  amountInr: number;
+  upiId: string;
+  paymentReference: string;
+  utrReference: string;
+  withoutUtr: boolean;
+}> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Please sign in to submit a VIP payment verification request.');
+  }
+  if (!currentUser.emailVerified) {
+    throw new Error('Please verify your email address before submitting a VIP payment request.');
+  }
+
+  const rawUtr = clampStr(params.utrReference, 64);
+  const cleanScreenshotName = clampStr(
+    params.screenshotName,
+    FIELD_LIMITS.RECEIPT_NAME_MAX
+  );
+  const rawDataUrl = (params.screenshotDataUrl || '').trim();
+  const cleanScreenshotDataUrl = rawDataUrl.startsWith('data:image/')
+    ? rawDataUrl.slice(0, FIELD_LIMITS.RECEIPT_DATA_MAX)
+    : '';
+
+  const requestedWithoutUtr = Boolean(params.withoutUtr);
+  if (!requestedWithoutUtr && rawUtr.length < 4 && !cleanScreenshotDataUrl) {
+    throw new Error(
+      'Please enter your UPI Transaction ID / UTR Reference (at least 4 characters), attach a payment screenshot, or select "Submit without UTR".'
+    );
+  }
+
+  const effectiveWithoutUtr = requestedWithoutUtr || rawUtr.length < 4;
+  const tierSpec = VIP_TIER_CONFIGS[params.tier];
+  const amountInr = tierSpec.pricesInr[params.billingCycle];
+
+  const candidateRef = clampStr(params.paymentReference, 64);
+  const paymentReference = /^FTPAY-[a-zA-Z0-9_-]{4,48}$/.test(candidateRef)
+    ? candidateRef
+    : `FTPAY-${Date.now().toString(36).toUpperCase()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)
+        .toUpperCase()}`;
+
+  const cleanEmail = clampStr(currentUser.email || '', 160) || 'user@fintrack.app';
+  const cleanDisplayName =
+    clampStr(params.displayName, 100) ||
+    clampStr(currentUser.displayName || '', 100) ||
+    clampStr(cleanEmail.split('@')[0], 100) ||
+    'FinTrack User';
+
+  const paymentMethodLabel =
+    clampStr(params.paymentMethodLabel, 60) ||
+    (effectiveWithoutUtr ? `UPI Without UTR (${VIP_UPI_ID})` : `UPI (${VIP_UPI_ID})`);
+
+  const requestId = `vipreq-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const payload: Record<string, unknown> = {
+    userId: currentUser.uid,
+    userEmail: cleanEmail,
+    displayName: cleanDisplayName,
+    tier: params.tier,
+    billingCycle: params.billingCycle,
+    amountInr,
+    upiId: VIP_UPI_ID,
+    paymentReference,
+    utrReference: rawUtr,
+    paymentMethodLabel,
+    withoutUtr: effectiveWithoutUtr,
+    status: 'pending',
+    adminNote: '',
+    reviewedBy: '',
+    reviewedAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cleanScreenshotName) {
+    payload.screenshotName = cleanScreenshotName;
+  }
+  if (cleanScreenshotDataUrl) {
+    payload.screenshotDataUrl = cleanScreenshotDataUrl;
+  }
+
+  try {
+    await setDoc(doc(db, 'vipPaymentRequests', requestId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `vipPaymentRequests/${requestId}`);
+  }
+
+  return {
+    requestId,
+    tier: params.tier,
+    billingCycle: params.billingCycle,
+    amountInr,
+    upiId: VIP_UPI_ID,
+    paymentReference,
+    utrReference: rawUtr,
+    withoutUtr: effectiveWithoutUtr,
+  };
+}
+
+export async function grantAdminVipWithoutUtr(params: {
+  targetUser: UserProfile;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  adminNote?: string;
+  resetAiQuota?: boolean;
+}): Promise<{ requestId: string; paymentReference: string; amountInr: number }> {
+  const { targetUser, tier, billingCycle } = params;
+  const targetEmail = clampStr(targetUser.email, 160) || 'user@fintrack.app';
+  if (targetEmail.toLowerCase() === ADMIN_EMAIL) {
+    throw new Error('Admin account already has full access.');
+  }
+
+  const tierSpec = VIP_TIER_CONFIGS[tier];
+  const cycleSpec = BILLING_CYCLE_LABELS[billingCycle];
+  const amountInr = tierSpec.pricesInr[billingCycle];
+  const cleanDisplayName =
+    clampStr(targetUser.displayName, 100) ||
+    clampStr(targetEmail.split('@')[0], 100) ||
+    'FinTrack User';
+  const cleanNote = clampStr(
+    params.adminNote || 'VIP activated by Admin without UTR verification',
+    500
+  );
+
+  const nowMs = Date.now();
+  const periodKey = `sub-${Math.floor(nowMs / 1000)}-c0`;
+  const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const paymentReference = clampStr(`FTPAY-ADMIN-${rand}`, 64);
+  const subPaymentRef = clampStr(`FTVIP-ADMIN-${rand}`, 100);
+  const requestId = `vipreq-${nowMs}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const batch = writeBatch(db);
+
+  batch.set(doc(db, 'vipPaymentRequests', requestId), {
+    userId: targetUser.uid,
+    userEmail: targetEmail,
+    displayName: cleanDisplayName,
+    tier,
+    billingCycle,
+    amountInr,
+    upiId: VIP_UPI_ID,
+    paymentReference,
+    utrReference: '',
+    paymentMethodLabel: 'Admin Added (Without UTR)',
+    withoutUtr: true,
+    status: 'approved',
+    adminNote: cleanNote,
+    reviewedBy: ADMIN_EMAIL,
+    reviewedAt: serverTimestamp(),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  const subRef = doc(db, 'vipSubscriptions', targetUser.uid);
+  const existingSubSnap = await getDoc(subRef);
+  const subPayload = {
+    userId: targetUser.uid,
+    tier,
+    billingCycle,
+    status: 'active',
+    priceInr: amountInr,
+    paymentReference: subPaymentRef,
+    periodKey,
+    periodStartAt: serverTimestamp(),
+    periodEndAt: Timestamp.fromMillis(nowMs + cycleSpec.days * 24 * 60 * 60 * 1000),
+    autoRenew: true,
+    updatedBy: ADMIN_EMAIL,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!existingSubSnap.exists()) {
+    batch.set(subRef, {
+      ...subPayload,
+      createdAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(subRef, subPayload);
+  }
+
+  const aiRef = doc(db, 'aiUsage', targetUser.uid);
+  const existingAiSnap = await getDoc(aiRef);
+  const monthEndMs = nowMs + 30 * 24 * 60 * 60 * 1000;
+  if (!existingAiSnap.exists() || params.resetAiQuota !== false) {
+    batch.set(aiRef, {
+      userId: targetUser.uid,
+      tier,
+      periodKey,
+      periodStartAt: Timestamp.fromMillis(nowMs),
+      periodEndAt: Timestamp.fromMillis(monthEndMs),
+      insightsUsed: 0,
+      insightsLimit: tierSpec.insightsLimit,
+      advisorUsed: 0,
+      advisorLimit: tierSpec.advisorLimit,
+      forecastUsed: 0,
+      lastResetAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(aiRef, {
+      tier,
+      insightsLimit: tierSpec.insightsLimit,
+      advisorLimit: tierSpec.advisorLimit,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const secRef = doc(db, 'securityProfiles', targetUser.uid);
+  const secSnap = await getDoc(secRef);
+  const nextVipStatus: VipStatus = tier === 'starter' ? 'none' : 'vip';
+  if (!secSnap.exists()) {
+    batch.set(secRef, {
+      userId: targetUser.uid,
+      userEmail: targetEmail,
+      displayName: cleanDisplayName,
+      restrictionStatus: 'active',
+      banType: 'none',
+      banReason: '',
+      banDurationLabel: '',
+      banDurationMs: 0,
+      banStartedAt: null,
+      banExpiresAt: null,
+      aiRestrictedUntil: null,
+      messagingRestrictedUntil: null,
+      warningCount: 0,
+      lastWarningAt: null,
+      riskLevel: 'low',
+      riskScore: 0,
+      underInvestigation: false,
+      vipStatus: nextVipStatus,
+      eventCount: 0,
+      lastEventAt: null,
+      updatedBy: ADMIN_EMAIL,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(secRef, {
+      vipStatus: nextVipStatus,
+      updatedBy: ADMIN_EMAIL,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const auditId = generateDocId();
+  batch.set(doc(db, 'securityAuditLogs', auditId), {
+    targetUserId: targetUser.uid,
+    targetUserEmail: targetEmail,
+    adminEmail: ADMIN_EMAIL,
+    actionType: 'update_vip_status',
+    reason: cleanNote,
+    details: clampStr(
+      `Admin added ${tierSpec.classLabel} ${tierSpec.name} (${cycleSpec.label}, ₹${amountInr}) without UTR · Ref ${paymentReference}`,
+      1000
+    ),
+    durationLabel: cycleSpec.label,
+    createdAt: serverTimestamp(),
+  });
+
+  const msgId = generateDocId();
+  batch.set(doc(db, 'users', targetUser.uid, 'adminMessages', msgId), {
+    userId: targetUser.uid,
+    heading: 'VIP MEMBERSHIP ACTIVATED',
+    message: clampStr(
+      `An administrator has reviewed and activated your ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) membership without requiring a UTR reference.${cleanNote ? ` Note: ${cleanNote}` : ''}`,
+      1500
+    ),
+    senderEmail: ADMIN_EMAIL,
+    isRead: false,
+    readAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `vipPaymentRequests/${requestId}`);
+  }
+
+  return { requestId, paymentReference, amountInr };
+}
+
 export async function reviewVipPaymentRequest(params: {
   request: VipPaymentRequest;
   decision: 'approved' | 'rejected';
@@ -2071,6 +2369,11 @@ export async function reviewVipPaymentRequest(params: {
     }
   }
 
+  const utrLabel = request.utrReference
+    ? `UTR: ${request.utrReference}`
+    : 'Without UTR';
+  const utrRefShort = request.utrReference || 'Without UTR';
+
   const auditId = generateDocId();
   batch.set(doc(db, 'securityAuditLogs', auditId), {
     targetUserId: request.userId,
@@ -2080,12 +2383,12 @@ export async function reviewVipPaymentRequest(params: {
     reason: clampStr(
       cleanNote ||
         (decision === 'approved'
-          ? `Confirmed UPI payment (UTR: ${request.utrReference}) to ${request.upiId}`
-          : `Rejected UPI payment (UTR: ${request.utrReference})`),
+          ? `Confirmed UPI payment (${utrLabel}) to ${request.upiId}`
+          : `Rejected UPI payment (${utrLabel})`),
       500
     ),
     details: clampStr(
-      `${decision === 'approved' ? 'Approved' : 'Rejected'} ${tierSpec.classLabel} ${tierSpec.name} (${cycleSpec.label}, ₹${request.amountInr}) · Ref ${request.paymentReference} · UTR ${request.utrReference}`,
+      `${decision === 'approved' ? 'Approved' : 'Rejected'} ${tierSpec.classLabel} ${tierSpec.name} (${cycleSpec.label}, ₹${request.amountInr}) · Ref ${request.paymentReference} · ${utrRefShort}`,
       1000
     ),
     durationLabel: cycleSpec.label,
@@ -2095,8 +2398,8 @@ export async function reviewVipPaymentRequest(params: {
   const msgId = generateDocId();
   const userMessage =
     decision === 'approved'
-      ? `Your UPI payment of ₹${request.amountInr} (UTR: ${request.utrReference}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) has been CONFIRMED. Your VIP features are now active.${cleanNote ? ` Admin note: ${cleanNote}` : ''}`
-      : `Your UPI payment verification request of ₹${request.amountInr} (UTR: ${request.utrReference}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) was REJECTED.${cleanNote ? ` Reason: ${cleanNote}` : ''} VIP features remain locked.`;
+      ? `Your UPI payment of ₹${request.amountInr} (${utrLabel}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) has been CONFIRMED. Your VIP features are now active.${cleanNote ? ` Admin note: ${cleanNote}` : ''}`
+      : `Your UPI payment verification request of ₹${request.amountInr} (${utrLabel}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) was REJECTED.${cleanNote ? ` Reason: ${cleanNote}` : ''} VIP features remain locked.`;
 
   batch.set(doc(db, 'users', request.userId, 'adminMessages', msgId), {
     userId: request.userId,

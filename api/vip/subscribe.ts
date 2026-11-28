@@ -12,7 +12,7 @@ export default async function handler(
   await runVercelPostHandler(
     req,
     res,
-    64 * 1024,
+    1024 * 1024,
     async (body, guard) => {
       if (!guard) {
         return {

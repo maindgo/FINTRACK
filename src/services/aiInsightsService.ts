@@ -631,6 +631,9 @@ export async function subscribeVipPlan(params: {
   submittedPriceInr: number;
   paymentReference: string;
   utrReference: string;
+  withoutUtr?: boolean;
+  screenshotName?: string;
+  screenshotDataUrl?: string;
   paymentMethodLabel?: string;
   displayName?: string;
 }): Promise<{
@@ -645,6 +648,7 @@ export async function subscribeVipPlan(params: {
   upiDeepLink: string;
   paymentReference: string;
   utrReference: string;
+  withoutUtr?: boolean;
   submittedAtIso: string;
 }> {
   const headers = await getAuthHeaders(true);
@@ -668,6 +672,7 @@ export async function subscribeVipPlan(params: {
     upiDeepLink: string;
     paymentReference: string;
     utrReference: string;
+    withoutUtr?: boolean;
     submittedAtIso: string;
   };
 }

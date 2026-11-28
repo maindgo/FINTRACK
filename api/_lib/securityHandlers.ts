@@ -167,6 +167,9 @@ export async function handleVipSubscribe(
     paymentMethodLabel?: unknown;
     paymentReference?: unknown;
     utrReference?: unknown;
+    withoutUtr?: unknown;
+    screenshotName?: unknown;
+    screenshotDataUrl?: unknown;
     displayName?: unknown;
   };
 
@@ -212,16 +215,26 @@ export async function handleVipSubscribe(
     }
   }
 
+  const withoutUtr = body.withoutUtr === true;
   const rawUtr = cleanStr(body.utrReference, 64);
-  if (rawUtr.length < 4) {
+  const rawScreenshotName = cleanStr(body.screenshotName, 160);
+  const rawScreenshotDataUrl =
+    typeof body.screenshotDataUrl === 'string' &&
+    body.screenshotDataUrl.startsWith('data:image/')
+      ? body.screenshotDataUrl.trim().slice(0, 250000)
+      : '';
+
+  if (!withoutUtr && rawUtr.length < 4 && !rawScreenshotDataUrl) {
     return {
       status: 400,
       body: {
-        error: 'Please enter a valid UPI Transaction ID / UTR Reference (minimum 4 characters) after completing payment.',
+        error: 'Please enter a valid UPI Transaction ID / UTR Reference (minimum 4 characters), attach a payment screenshot, or choose Submit without UTR.',
         code: 'MISSING_UTR_REFERENCE',
       },
     };
   }
+
+  const effectiveWithoutUtr = withoutUtr || rawUtr.length < 4;
 
   const candidateRef = cleanStr(body.paymentReference, 64);
   const paymentReference = /^FTPAY-[a-zA-Z0-9_-]{4,48}$/.test(candidateRef)
@@ -255,6 +268,11 @@ export async function handleVipSubscribe(
     paymentReference: { type: 'string', value: paymentReference },
     utrReference: { type: 'string', value: rawUtr },
     paymentMethodLabel: { type: 'string', value: paymentMethodLabel },
+    withoutUtr: { type: 'boolean', value: effectiveWithoutUtr },
+    ...(rawScreenshotName ? { screenshotName: { type: 'string', value: rawScreenshotName } } : {}),
+    ...(rawScreenshotDataUrl
+      ? { screenshotDataUrl: { type: 'string', value: rawScreenshotDataUrl } }
+      : {}),
     status: { type: 'string', value: 'pending' },
     adminNote: { type: 'string', value: '' },
     reviewedBy: { type: 'string', value: '' },
@@ -301,6 +319,7 @@ export async function handleVipSubscribe(
       upiDeepLink,
       paymentReference,
       utrReference: rawUtr,
+      withoutUtr: effectiveWithoutUtr,
       submittedAtIso: nowIso,
     },
   };

@@ -156,11 +156,20 @@ export async function verifyFirebaseIdToken(
     return null;
   }
 
-  let certs = await fetchFirebasePublicCerts(false);
+  let certs: Record<string, string>;
+  try {
+    certs = await fetchFirebasePublicCerts(false);
+  } catch {
+    return null;
+  }
   let certPem = certs[header.kid];
   if (!certPem) {
-    certs = await fetchFirebasePublicCerts(true);
-    certPem = certs[header.kid];
+    try {
+      certs = await fetchFirebasePublicCerts(true);
+      certPem = certs[header.kid];
+    } catch {
+      return null;
+    }
   }
   if (!certPem) return null;
 
@@ -301,8 +310,10 @@ export async function commitFirestoreDocAsCaller(params: {
     projectId
   )}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents:commit`;
 
+  const serverTsSet = new Set(params.serverTimestampFields || []);
   const encodedFields: Record<string, Record<string, unknown>> = {};
   for (const [k, v] of Object.entries(params.fields)) {
+    if (serverTsSet.has(k)) continue;
     encodedFields[k] = encodeFirestoreWriteValue(v);
   }
 

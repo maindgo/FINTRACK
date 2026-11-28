@@ -513,6 +513,9 @@ export interface VipPaymentRequest {
   paymentReference: string;
   utrReference: string;
   paymentMethodLabel: string;
+  withoutUtr?: boolean;
+  screenshotName?: string;
+  screenshotDataUrl?: string;
   status: VipPaymentRequestStatus;
   adminNote: string;
   reviewedBy: string;

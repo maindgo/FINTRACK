@@ -9,5 +9,17 @@ export default async function handler(
   req: VercelLikeRequest,
   res: VercelLikeResponse
 ): Promise<void> {
-  await runVercelPostHandler(req, res, 128 * 1024, handleAIChat);
+  await runVercelPostHandler(
+    req,
+    res,
+    128 * 1024,
+    (body, guard) => handleAIChat(body, guard),
+    {
+      requireVerifiedEmail: true,
+      checkAiAccess: true,
+      requiredVipTier: 'gold',
+      aiQuotaType: 'advisor',
+      endpointLabel: '/api/ai/chat',
+    }
+  );
 }

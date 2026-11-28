@@ -8,25 +8,72 @@ import {
   getClientKeyFromHeaders,
   handleAIChat,
   handleAIInsights,
+  handleDiamondForecast,
   handleHealth,
   handleVoiceTransaction,
 } from './api/_lib/aiHandlers.ts';
+import {
+  trackRateLimitViolation,
+  verifyCallerSecurityAccess,
+  type SecurityGuardOptions,
+  type SecurityGuardResult,
+} from './api/_lib/securityGuard.ts';
+import {
+  handleAdminSecurityTelemetry,
+  handleAuthSecurityEvent,
+  handleSecurityStatus,
+  handleVipCancel,
+  handleVipEntitlementCheck,
+  handleVipStatus,
+  handleVipSubscribe,
+} from './api/_lib/securityHandlers.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 
-function aiRateLimiter(req: Request, res: Response, next: NextFunction): void {
-  const key = getClientKeyFromHeaders(
-    req.headers as Record<string, string | string[] | undefined>,
-    req.ip || 'unknown'
-  );
+interface SecuredRequest extends Request {
+  verifiedSecurity?: Extract<SecurityGuardResult, { allowed: true }>;
+}
+
+function createSecurityMiddleware(options: SecurityGuardOptions) {
+  return async (req: SecuredRequest, res: Response, next: NextFunction): Promise<void> => {
+    const guard = await verifyCallerSecurityAccess(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip || 'unknown',
+      options
+    );
+    if (guard.allowed === false) {
+      res.status(guard.status).json(guard.body);
+      return;
+    }
+    req.verifiedSecurity = guard;
+    next();
+  };
+}
+
+function aiRateLimiter(req: SecuredRequest, res: Response, next: NextFunction): void {
+  const verified = req.verifiedSecurity;
+  const key = verified
+    ? `uid:${verified.token.uid}`
+    : getClientKeyFromHeaders(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip || 'unknown'
+      );
   const rate = checkRateLimit(key);
   if (!rate.allowed) {
+    trackRateLimitViolation({
+      clientKey: key,
+      userId: verified?.token.uid,
+      userEmail: verified?.token.email,
+      endpoint: req.path || '/api',
+      retryAfterSeconds: rate.retryAfterSeconds,
+      headers: req.headers as Record<string, string | string[] | undefined>,
+    });
     res.setHeader('Retry-After', String(rate.retryAfterSeconds));
     res.status(429).json({
-      error: `Too many AI requests. Please wait ${rate.retryAfterSeconds} seconds before trying again.`,
+      error: `Too many requests. Please wait ${rate.retryAfterSeconds} seconds before trying again.`,
       code: 'RATE_LIMITED',
       retryAfterSeconds: rate.retryAfterSeconds,
     });
@@ -54,20 +101,179 @@ async function startServer(): Promise<void> {
     res.status(result.status).json(result.body);
   });
 
-  app.post('/api/ai/insights', aiRateLimiter, async (req: Request, res: Response) => {
-    const result = await handleAIInsights(req.body);
+  app.post(
+    '/api/ai/insights',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      checkAiAccess: true,
+      requiredVipTier: 'silver',
+      aiQuotaType: 'insights',
+      endpointLabel: '/api/ai/insights',
+    }),
+    aiRateLimiter,
+    async (req: SecuredRequest, res: Response) => {
+      const result = await handleAIInsights(req.body, req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post(
+    '/api/ai/chat',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      checkAiAccess: true,
+      requiredVipTier: 'gold',
+      aiQuotaType: 'advisor',
+      endpointLabel: '/api/ai/chat',
+    }),
+    aiRateLimiter,
+    async (req: SecuredRequest, res: Response) => {
+      const result = await handleAIChat(req.body, req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post(
+    '/api/ai/forecast',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      checkAiAccess: true,
+      requiredVipTier: 'diamond',
+      aiQuotaType: 'forecast',
+      endpointLabel: '/api/ai/forecast',
+    }),
+    aiRateLimiter,
+    async (req: SecuredRequest, res: Response) => {
+      const result = await handleDiamondForecast(req.body, req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.get(
+    '/api/vip/status',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      endpointLabel: '/api/vip/status',
+    }),
+    (req: SecuredRequest, res: Response) => {
+      if (!req.verifiedSecurity) {
+        res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHORIZED' });
+        return;
+      }
+      const result = handleVipStatus(req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post(
+    '/api/vip/subscribe',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      endpointLabel: '/api/vip/subscribe',
+    }),
+    aiRateLimiter,
+    async (req: SecuredRequest, res: Response) => {
+      if (!req.verifiedSecurity) {
+        res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHORIZED' });
+        return;
+      }
+      const result = await handleVipSubscribe(req.body, req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post(
+    '/api/vip/cancel',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      endpointLabel: '/api/vip/cancel',
+    }),
+    aiRateLimiter,
+    async (req: SecuredRequest, res: Response) => {
+      if (!req.verifiedSecurity) {
+        res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHORIZED' });
+        return;
+      }
+      const result = await handleVipCancel(req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post(
+    '/api/ai/voice-transaction',
+    createSecurityMiddleware({
+      requireVerifiedEmail: true,
+      checkAiAccess: true,
+      endpointLabel: '/api/ai/voice-transaction',
+    }),
+    aiRateLimiter,
+    async (req: Request, res: Response) => {
+      const result = await handleVoiceTransaction(req.body);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.get(
+    '/api/security/status',
+    createSecurityMiddleware({
+      requireVerifiedEmail: false,
+      endpointLabel: '/api/security/status',
+    }),
+    (req: SecuredRequest, res: Response) => {
+      if (!req.verifiedSecurity) {
+        res.status(401).json({ error: 'Authentication required.', code: 'UNAUTHORIZED' });
+        return;
+      }
+      const result = handleSecurityStatus(req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
+
+  app.post('/api/security/auth-event', aiRateLimiter, (req: Request, res: Response) => {
+    const result = handleAuthSecurityEvent(
+      req.body,
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip || 'unknown'
+    );
     res.status(result.status).json(result.body);
   });
 
-  app.post('/api/ai/chat', aiRateLimiter, async (req: Request, res: Response) => {
-    const result = await handleAIChat(req.body);
+  app.get('/api/security/vip-check', async (req: Request, res: Response) => {
+    const claimedVip = String(req.query.claimedVip || '') === 'true';
+    const guard = await verifyCallerSecurityAccess(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip || 'unknown',
+      {
+        requireVerifiedEmail: true,
+        checkVipAccess: true,
+        claimedVip,
+        endpointLabel: '/api/security/vip-check',
+      }
+    );
+    if (guard.allowed === false) {
+      res.status(guard.status).json(guard.body);
+      return;
+    }
+    const result = handleVipEntitlementCheck(guard);
     res.status(result.status).json(result.body);
   });
 
-  app.post('/api/ai/voice-transaction', aiRateLimiter, async (req: Request, res: Response) => {
-    const result = await handleVoiceTransaction(req.body);
-    res.status(result.status).json(result.body);
-  });
+  app.get(
+    '/api/admin/security-telemetry',
+    createSecurityMiddleware({
+      requireAdmin: true,
+      requireVerifiedEmail: true,
+      endpointLabel: '/api/admin/security-telemetry',
+    }),
+    (req: SecuredRequest, res: Response) => {
+      if (!req.verifiedSecurity) {
+        res.status(403).json({ error: 'Administrator permissions required.', code: 'ADMIN_REQUIRED' });
+        return;
+      }
+      const result = handleAdminSecurityTelemetry(req.verifiedSecurity);
+      res.status(result.status).json(result.body);
+    }
+  );
 
   const distDir = path.resolve(__dirname, 'dist');
   const distIndex = path.resolve(distDir, 'index.html');

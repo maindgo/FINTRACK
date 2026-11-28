@@ -597,6 +597,172 @@
         }
       },
       "required": ["userId", "heading", "message", "senderEmail", "isRead", "readAt", "createdAt", "updatedAt"]
+    },
+    "SecurityProfile": {
+      "title": "SecurityProfile",
+      "description": "Admin-controlled account restriction, ban state, AI/messaging limits, VIP entitlement, and evidence risk classification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "format": "email", "minLength": 3, "maxLength": 160 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "restrictionStatus": { "type": "string", "enum": ["active", "under_investigation", "temp_banned", "perm_banned"] },
+        "banType": { "type": "string", "enum": ["none", "temporary", "permanent"] },
+        "banReason": { "type": "string", "maxLength": 500 },
+        "banDurationLabel": { "type": "string", "maxLength": 64 },
+        "banDurationMs": { "type": "number" },
+        "banStartedAt": { "type": "string", "format": "date-time" },
+        "banExpiresAt": { "type": "string", "format": "date-time" },
+        "aiRestrictedUntil": { "type": "string", "format": "date-time" },
+        "messagingRestrictedUntil": { "type": "string", "format": "date-time" },
+        "warningCount": { "type": "number" },
+        "lastWarningAt": { "type": "string", "format": "date-time" },
+        "riskLevel": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "riskScore": { "type": "number" },
+        "underInvestigation": { "type": "boolean" },
+        "vipStatus": { "type": "string", "enum": ["none", "vip"] },
+        "eventCount": { "type": "number" },
+        "lastEventAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "displayName", "restrictionStatus", "banType", "banReason", "banDurationLabel", "banDurationMs", "banStartedAt", "banExpiresAt", "aiRestrictedUntil", "messagingRestrictedUntil", "warningCount", "lastWarningAt", "riskLevel", "riskScore", "underInvestigation", "vipStatus", "eventCount", "lastEventAt", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "SecurityCase": {
+      "title": "SecurityCase",
+      "description": "Admin-only internal investigation notes and evidence summary (never readable by users).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "internalNotes": { "type": "string", "maxLength": 3000 },
+        "evidenceSummary": { "type": "string", "maxLength": 2000 },
+        "lastReviewedBy": { "type": "string", "maxLength": 160 },
+        "lastReviewedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "internalNotes", "evidenceSummary", "lastReviewedBy", "lastReviewedAt", "updatedAt"]
+    },
+    "SecurityEvent": {
+      "title": "SecurityEvent",
+      "description": "Detected suspicious security event with evidence-based risk classification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "enum": ["account_security", "vip_payment_security", "api_backend_security", "data_security", "messaging_security"] },
+        "eventType": { "type": "string", "minLength": 3, "maxLength": 64 },
+        "riskLevel": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "riskScore": { "type": "number" },
+        "summary": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "evidence": { "type": "string", "maxLength": 1500 },
+        "source": { "type": "string", "enum": ["client", "backend", "admin"] },
+        "status": { "type": "string", "enum": ["open", "reviewed", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "category", "eventType", "riskLevel", "riskScore", "summary", "evidence", "source", "status", "createdAt"]
+    },
+    "SecurityAppeal": {
+      "title": "SecurityAppeal",
+      "description": "Ban appeal submitted by a temporarily or permanently banned user for administrator review.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "format": "email", "minLength": 3, "maxLength": 160 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "banType": { "type": "string", "enum": ["temporary", "permanent", "none"] },
+        "banReason": { "type": "string", "maxLength": 500 },
+        "appealReason": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "explanation": { "type": "string", "minLength": 10, "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["pending", "under_review", "approved", "rejected"] },
+        "adminDecisionNote": { "type": "string", "maxLength": 1000 },
+        "reviewedBy": { "type": "string", "maxLength": 160 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "displayName", "banType", "banReason", "appealReason", "explanation", "status", "adminDecisionNote", "reviewedBy", "reviewedAt", "createdAt", "updatedAt"]
+    },
+    "SecurityAuditLog": {
+      "title": "SecurityAuditLog",
+      "description": "Immutable log of every administrative action executed in the Security Center.",
+      "type": "object",
+      "properties": {
+        "targetUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetUserEmail": { "type": "string", "maxLength": 160 },
+        "adminEmail": { "type": "string", "format": "email", "minLength": 3, "maxLength": 160 },
+        "actionType": { "type": "string", "minLength": 3, "maxLength": 64 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "durationLabel": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetUserId", "targetUserEmail", "adminEmail", "actionType", "reason", "details", "durationLabel", "createdAt"]
+    },
+    "VipSubscription": {
+      "title": "VipSubscription",
+      "description": "User VIP membership class, billing cycle, active period, and payment reference.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tier": { "type": "string", "enum": ["starter", "silver", "gold", "diamond"] },
+        "billingCycle": { "type": "string", "enum": ["monthly", "quarterly", "yearly"] },
+        "status": { "type": "string", "enum": ["active", "expired", "cancelled"] },
+        "priceInr": { "type": "number" },
+        "paymentReference": { "type": "string", "minLength": 3, "maxLength": 100 },
+        "periodKey": { "type": "string", "minLength": 4, "maxLength": 40 },
+        "periodStartAt": { "type": "string", "format": "date-time" },
+        "periodEndAt": { "type": "string", "format": "date-time" },
+        "autoRenew": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "tier", "billingCycle", "status", "priceInr", "paymentReference", "periodKey", "periodStartAt", "periodEndAt", "autoRenew", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "AiUsageRecord": {
+      "title": "AiUsageRecord",
+      "description": "Per-user and per-subscription-period AI Insights, AI Advisor, and Diamond Forecast usage counters.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tier": { "type": "string", "enum": ["starter", "silver", "gold", "diamond"] },
+        "periodKey": { "type": "string", "minLength": 4, "maxLength": 40 },
+        "periodStartAt": { "type": "string", "format": "date-time" },
+        "periodEndAt": { "type": "string", "format": "date-time" },
+        "insightsUsed": { "type": "number" },
+        "insightsLimit": { "type": "number" },
+        "advisorUsed": { "type": "number" },
+        "advisorLimit": { "type": "number" },
+        "forecastUsed": { "type": "number" },
+        "lastResetAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "tier", "periodKey", "periodStartAt", "periodEndAt", "insightsUsed", "insightsLimit", "advisorUsed", "advisorLimit", "forecastUsed", "lastResetAt", "updatedAt"]
+    },
+    "VipPaymentRequest": {
+      "title": "VipPaymentRequest",
+      "description": "Pending or reviewed user UPI VIP payment verification request submitted for FinTrack Admin confirmation or rejection.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "format": "email", "minLength": 3, "maxLength": 160 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "tier": { "type": "string", "enum": ["starter", "silver", "gold", "diamond"] },
+        "billingCycle": { "type": "string", "enum": ["monthly", "quarterly", "yearly"] },
+        "amountInr": { "type": "number" },
+        "upiId": { "type": "string", "minLength": 5, "maxLength": 80 },
+        "paymentReference": { "type": "string", "minLength": 6, "maxLength": 64, "pattern": "^FTPAY-[a-zA-Z0-9_\\-]+$" },
+        "utrReference": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "paymentMethodLabel": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "adminNote": { "type": "string", "maxLength": 500 },
+        "reviewedBy": { "type": "string", "maxLength": 160 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "userEmail", "displayName", "tier", "billingCycle", "amountInr", "upiId", "paymentReference", "utrReference", "paymentMethodLabel", "status", "adminNote", "reviewedBy", "reviewedAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -643,6 +809,38 @@
     "/users/{userId}/adminMessages/{messageId}": {
       "schema": { "$ref": "#/entities/AdminMessage" },
       "description": "Important administrative pop-up messages sent to user accounts."
+    },
+    "/securityProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/SecurityProfile" },
+      "description": "Admin-controlled security restriction, ban state, AI/messaging blocks, and risk posture."
+    },
+    "/securityCases/{userId}": {
+      "schema": { "$ref": "#/entities/SecurityCase" },
+      "description": "Admin-only internal investigation notes and evidence summaries."
+    },
+    "/securityEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/SecurityEvent" },
+      "description": "Suspicious security events with evidence and risk levels."
+    },
+    "/securityAppeals/{appealId}": {
+      "schema": { "$ref": "#/entities/SecurityAppeal" },
+      "description": "User ban appeals for administrator review."
+    },
+    "/securityAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/SecurityAuditLog" },
+      "description": "Immutable administrative action audit log."
+    },
+    "/vipSubscriptions/{userId}": {
+      "schema": { "$ref": "#/entities/VipSubscription" },
+      "description": "VIP subscription class (starter, silver, gold, diamond), billing cycle, active validity window, and price integrity—activated exclusively by verified admin."
+    },
+    "/aiUsage/{userId}": {
+      "schema": { "$ref": "#/entities/AiUsageRecord" },
+      "description": "Per-user monthly/period AI usage tracking and automatic reset timestamps."
+    },
+    "/vipPaymentRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/VipPaymentRequest" },
+      "description": "User-submitted UPI payment verification requests awaiting administrator confirmation or rejection before VIP activation."
     }
   }
 }

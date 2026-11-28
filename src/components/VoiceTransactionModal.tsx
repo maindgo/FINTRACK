@@ -17,8 +17,13 @@ import {
   X,
 } from 'lucide-react';
 import { useFinance } from '../context/FinanceContext';
-import { parseVoiceTransaction, AIInsightsApiError } from '../services/aiInsightsService';
+import {
+  AIInsightsApiError,
+  parseVoicePhraseLocally,
+  parseVoiceTransaction,
+} from '../services/aiInsightsService';
 import { createTransaction, deleteTransaction } from '../services/firestoreService';
+import { formatDurationHhMmSs } from '../services/securityDetectionService';
 import {
   ExpenseCategory,
   IncomeCategory,
@@ -200,7 +205,12 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionModalProps) {
-  const { currency } = useFinance();
+  const {
+    currency,
+    isGuest,
+    isAiRestricted,
+    aiRestrictedUntilMs,
+  } = useFinance();
 
   const [autoSave, setAutoSave] = useState(true);
   const [recording, setRecording] = useState(false);
@@ -430,6 +440,32 @@ export function VoiceTransactionModal({ open, uid, onClose }: VoiceTransactionMo
     mimeType?: string;
     transcriptText?: string;
   }) => {
+    if (isAiRestricted) {
+      const rem = aiRestrictedUntilMs ? Math.max(0, aiRestrictedUntilMs - Date.now()) : 0;
+      setError(
+        `AI access is temporarily restricted on your account${
+          rem > 0 ? ` (${formatDurationHhMmSs(rem)} remaining)` : ''
+        }.`
+      );
+      return;
+    }
+
+    if (isGuest) {
+      if (payload.transcriptText) {
+        const parsed = parseVoicePhraseLocally(
+          payload.transcriptText,
+          getTodayStr(),
+          getCurrentTimeStr()
+        );
+        await processParsedResult(parsed);
+        return;
+      }
+      setError(
+        'Cloud Gemini audio transcription requires a signed-in verified account. Use Browser Live Dictation or type your transaction phrase below.'
+      );
+      return;
+    }
+
     setProcessing(true);
     setError('');
     setSavedRecord(null);

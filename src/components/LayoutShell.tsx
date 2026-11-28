@@ -42,6 +42,7 @@ import { NAV_ITEMS } from '../utils/constants';
 import { isRunningInIframe } from '../services/notificationService';
 import { BrandLogo } from './BrandLogo';
 import { PWAInstallButton } from './PWAInstallButton';
+import { VIP_TIER_CONFIGS } from '../utils/vipTiers';
 
 const NAV_ICONS: Record<NavSection, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
@@ -69,6 +70,7 @@ interface LayoutShellProps {
   securityConfigured?: boolean;
   onLockApp?: () => void;
   onPreviewMaintenance?: () => void;
+  onOpenAdminVipApprovals?: () => void;
   children: React.ReactNode;
 }
 
@@ -80,6 +82,7 @@ export function LayoutShell({
   securityConfigured = false,
   onLockApp,
   onPreviewMaintenance,
+  onOpenAdminVipApprovals,
   children,
 }: LayoutShellProps) {
   const {
@@ -106,6 +109,8 @@ export function LayoutShell({
     markAllNotificationsRead,
     dismissNotification,
     restoreDismissedNotifications,
+    vipTier,
+    pendingVipRequestCount,
   } = useFinance();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -197,19 +202,27 @@ export function LayoutShell({
         {NAV_ITEMS.filter((item) => item.id !== 'admin' || isAdmin).map((item) => {
           const Icon = NAV_ICONS[item.id];
           const isActive = activeSection === item.id;
+          const showPendingVipBadge = item.id === 'admin' && pendingVipRequestCount > 0;
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => handleNavClick(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                 isActive
                   ? 'bg-emerald-600 text-white'
                   : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
               }`}
             >
-              <Icon className="w-4 h-4 shrink-0" />
-              <span className="truncate">{item.label}</span>
+              <span className="flex items-center gap-3 min-w-0">
+                <Icon className="w-4 h-4 shrink-0" />
+                <span className="truncate">{item.label}</span>
+              </span>
+              {showPendingVipBadge && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[10px] font-bold font-mono leading-none shrink-0">
+                  {pendingVipRequestCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -230,6 +243,14 @@ export function LayoutShell({
             <div className="text-[11px] text-slate-400 truncate">
               {isGuest ? 'Guest Mode · Local Storage' : user?.email}
             </div>
+            {!isGuest && (
+              <div className="mt-1 flex items-center gap-1.5">
+                <Crown className="w-3 h-3 text-amber-400 shrink-0" />
+                <span className="text-[10px] font-semibold tracking-wide uppercase text-amber-300 truncate">
+                  {VIP_TIER_CONFIGS[vipTier].classLabel} · {VIP_TIER_CONFIGS[vipTier].badgeLabel}
+                </span>
+              </div>
+            )}
           </div>
         </div>
         {isGuest ? (
@@ -298,6 +319,17 @@ export function LayoutShell({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {!isGuest && (
+              <button
+                type="button"
+                onClick={() => onSelectSection('vip')}
+                title="View VIP Membership Plan"
+                className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold whitespace-nowrap shrink-0 transition-opacity hover:opacity-90 ${VIP_TIER_CONFIGS[vipTier].badgeContainerClass}`}
+              >
+                <Crown className="w-3.5 h-3.5 shrink-0" />
+                <span>{VIP_TIER_CONFIGS[vipTier].badgeLabel}</span>
+              </button>
+            )}
             <PWAInstallButton />
             <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
               <CreditCard className="w-3.5 h-3.5" />
@@ -567,6 +599,33 @@ export function LayoutShell({
 
         {/* Page Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1440px] w-full mx-auto space-y-5">
+          {isAdmin && pendingVipRequestCount > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+                <Crown className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span>
+                  <span className="font-semibold">
+                    {pendingVipRequestCount} Pending VIP UPI Payment{pendingVipRequestCount === 1 ? '' : 's'}:
+                  </span>{' '}
+                  Users submitted UPI payment verification to <span className="font-mono font-semibold">tntmilan06@slc</span>. Confirm or reject in the Admin Panel.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenAdminVipApprovals) {
+                    onOpenAdminVipApprovals();
+                  } else {
+                    onSelectSection('admin');
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 text-xs font-semibold hover:bg-amber-400 whitespace-nowrap self-start sm:self-auto shrink-0"
+              >
+                Review &amp; Confirm ({pendingVipRequestCount})
+              </button>
+            </div>
+          )}
+
           {isAdmin && maintenanceEnabled && (
             <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">

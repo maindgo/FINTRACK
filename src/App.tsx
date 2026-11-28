@@ -3,6 +3,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from './firebase';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FinanceProvider, useFinance } from './context/FinanceContext';
+import { AccountRestrictionScreen } from './components/AccountRestrictionScreen';
 import { AppLockScreen } from './components/AppLockScreen';
 import { AuthView } from './components/AuthView';
 import { LayoutShell } from './components/LayoutShell';
@@ -35,7 +36,7 @@ import {
   SecurityLockConfig,
 } from './services/securityService';
 import { NavSection, TransactionRecord, TransactionType } from './types/finance';
-import { NAV_ITEMS, SUPPORT_EMAIL } from './utils/constants';
+import { NAV_ITEMS } from './utils/constants';
 
 const VALID_SECTIONS = new Set<NavSection>(NAV_ITEMS.map((item) => item.id));
 
@@ -49,6 +50,7 @@ function FinTrackWorkspace() {
     exitGuestMode,
     isAdmin,
     isAccountDeactivated,
+    isAccountBanned,
     adminMessages,
     acknowledgeAdminMessage,
     maintenanceEnabled,
@@ -66,6 +68,7 @@ function FinTrackWorkspace() {
     }
     return 'dashboard';
   });
+  const [adminInitialTab, setAdminInitialTab] = useState<'users' | 'security' | 'vip-approvals'>('users');
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [txInitialType, setTxInitialType] = useState<TransactionType>('expense');
@@ -216,33 +219,8 @@ function FinTrackWorkspace() {
     return <AuthView />;
   }
 
-  if (isAccountDeactivated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
-        <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-red-200 dark:border-red-900 rounded-2xl p-8 text-center space-y-4 shadow-xl">
-          <div className="w-12 h-12 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-800 flex items-center justify-center text-red-600 dark:text-red-400 mx-auto font-bold text-lg">
-            !
-          </div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white">
-            Account Deactivated
-          </h1>
-          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-            Your FinTrack account (<span className="font-semibold">{user.email}</span>) has been deactivated by an administrator. If you think this is an error, please contact{' '}
-            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-emerald-600 dark:text-emerald-400 font-semibold underline">
-              {SUPPORT_EMAIL}
-            </a>
-            .
-          </p>
-          <button
-            type="button"
-            onClick={() => signOut(auth)}
-            className="w-full py-2.5 px-4 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-semibold hover:opacity-90"
-          >
-            Sign Out
-          </button>
-        </div>
-      </div>
-    );
+  if (isAccountDeactivated || isAccountBanned) {
+    return <AccountRestrictionScreen />;
   }
 
   const openAddTransaction = (type: TransactionType) => {
@@ -269,6 +247,10 @@ function FinTrackWorkspace() {
       securityConfigured={isAppSecurityConfigured(securityConfig)}
       onLockApp={handleLockApp}
       onPreviewMaintenance={() => setAdminBypassMaintenance(false)}
+      onOpenAdminVipApprovals={() => {
+        setAdminInitialTab('vip-approvals');
+        setActiveSection('admin');
+      }}
     >
       {resolvedSection === 'dashboard' && (
         <DashboardPage
@@ -308,7 +290,7 @@ function FinTrackWorkspace() {
       {resolvedSection === 'insights' && <InsightsPage />}
       {resolvedSection === 'ai-insights' && <AIInsightsPage onNavigate={setActiveSection} />}
       {resolvedSection === 'vip' && <VipPage onNavigate={setActiveSection} />}
-      {resolvedSection === 'admin' && isAdmin && <AdminPage />}
+      {resolvedSection === 'admin' && isAdmin && <AdminPage initialSection={adminInitialTab} />}
       {resolvedSection === 'settings' && <SettingsPage />}
 
       <TransactionModal

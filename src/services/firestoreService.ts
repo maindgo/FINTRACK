@@ -2,36 +2,64 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
   AccountStatus,
+  AiUsageRecord,
+  AppealStatus,
+  BanType,
   BillRecord,
+  BillingCycle,
   BudgetRecord,
   CurrencyCode,
   DebtRecord,
   MaintenanceConfig,
   RecurringTransaction,
   RecordStatus,
+  RestrictionStatus,
   SavingsGoal,
+  SecurityAdminActionType,
+  SecurityAppeal,
+  SecurityAuditLog,
+  SecurityCase,
+  SecurityEventCategory,
+  SecurityEventRecord,
+  SecurityEventType,
+  SecurityProfile,
+  SecurityRiskLevel,
   ThemeMode,
   TransactionRecord,
   UserProfile,
+  VipPaymentRequest,
+  VipStatus,
+  VipSubscription,
+  VipTier,
 } from '../types/finance';
 import {
   ADMIN_EMAIL,
   DEFAULT_ADMIN_MESSAGE_HEADING,
   FIELD_LIMITS,
 } from '../utils/constants';
+import { BILLING_CYCLE_LABELS, VIP_TIER_CONFIGS } from '../utils/vipTiers';
 import { addFrequencyToDate, getTodayStr } from '../utils/formatters';
+import {
+  analyzeMessageSecurity,
+  checkBulkMutationAnomaly,
+  EVENT_BASE_WEIGHTS,
+} from './securityDetectionService';
 import {
   clearGuestStoreData,
   GUEST_UID,
@@ -226,6 +254,19 @@ export async function deleteTransaction(uid: string, id: string): Promise<void> 
   const path = `users/${uid}/transactions/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'transactions', id));
+    const anomaly = checkBulkMutationAnomaly(uid, 'transaction deletion');
+    if (anomaly.suspicious) {
+      void logClientSecurityEvent({
+        userId: uid,
+        userEmail: auth.currentUser?.email || '',
+        category: 'data_security',
+        eventType: 'suspicious_bulk_mutation',
+        riskLevel: anomaly.countInWindow >= 10 ? 'high' : 'medium',
+        riskScore: Math.min(80, 32 + anomaly.countInWindow * 4),
+        summary: 'Suspicious rapid bulk deletion of financial transactions',
+        evidence: anomaly.evidence,
+      });
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -1003,5 +1044,1074 @@ export async function markAdminMessageRead(uid: string, messageId: string): Prom
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// --- FinTrack Security Center & Suspicious Activity Monitoring ---
+const recentClientEventTimes = new Map<string, number>();
+
+export async function logClientSecurityEvent(input: {
+  userId: string;
+  userEmail: string;
+  category: SecurityEventCategory;
+  eventType: SecurityEventType;
+  riskLevel: SecurityRiskLevel;
+  riskScore?: number;
+  summary: string;
+  evidence: string;
+}): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.emailVerified || currentUser.uid !== input.userId) {
+    return;
+  }
+
+  // Throttle identical client event types per user (30s window) to avoid spam
+  const throttleKey = `${input.userId}:${input.eventType}`;
+  const now = Date.now();
+  const lastTs = recentClientEventTimes.get(throttleKey) || 0;
+  if (now - lastTs < 30_000) return;
+  recentClientEventTimes.set(throttleKey, now);
+
+  try {
+    const id = generateDocId();
+    const score = Math.max(
+      0,
+      Math.min(100, Math.round(input.riskScore ?? EVENT_BASE_WEIGHTS[input.eventType] ?? 25))
+    );
+    await setDoc(doc(db, 'securityEvents', id), {
+      userId: input.userId,
+      userEmail: clampStr(input.userEmail, 160),
+      category: input.category,
+      eventType: input.eventType,
+      riskLevel: input.riskLevel,
+      riskScore: score,
+      summary: clampStr(input.summary, 300) || 'Security event recorded',
+      evidence: clampStr(input.evidence, 1500),
+      source: 'client',
+      status: 'open',
+      createdAt: serverTimestamp(),
+    });
+  } catch {
+    // Never crash user flow or recurse if security logging fails
+  }
+}
+
+export async function logAdminSecurityEvent(input: {
+  userId: string;
+  userEmail: string;
+  category: SecurityEventCategory;
+  eventType: SecurityEventType;
+  riskLevel: SecurityRiskLevel;
+  riskScore: number;
+  summary: string;
+  evidence: string;
+}): Promise<void> {
+  const id = generateDocId();
+  const path = `securityEvents/${id}`;
+  try {
+    await setDoc(doc(db, 'securityEvents', id), {
+      userId: clampStr(input.userId, 128),
+      userEmail: clampStr(input.userEmail, 160),
+      category: input.category,
+      eventType: input.eventType,
+      riskLevel: input.riskLevel,
+      riskScore: Math.max(0, Math.min(100, Math.round(input.riskScore))),
+      summary: clampStr(input.summary, 300) || 'Admin security event',
+      evidence: clampStr(input.evidence, 1500),
+      source: 'admin',
+      status: 'reviewed',
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateSecurityEventStatus(
+  eventId: string,
+  status: 'open' | 'reviewed' | 'dismissed'
+): Promise<void> {
+  const path = `securityEvents/${eventId}`;
+  try {
+    await updateDoc(doc(db, 'securityEvents', eventId), { status });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export function subscribeUserSecurityProfile(
+  uid: string,
+  onUpdate: (profile: SecurityProfile | null) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const ref = doc(db, 'securityProfiles', uid);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      onUpdate({
+        ...(snap.data() as Omit<SecurityProfile, 'userId'>),
+        userId: snap.id,
+      });
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.GET, `securityProfiles/${uid}`);
+    }
+  );
+}
+
+export function subscribeUserAppeals(
+  uid: string,
+  onUpdate: (appeals: SecurityAppeal[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const q = query(collection(db, 'securityAppeals'), where('userId', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SecurityAppeal, 'id'>),
+      }));
+      list.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityAppeals');
+    }
+  );
+}
+
+export function subscribeAllSecurityProfilesForAdmin(
+  onUpdate: (profiles: SecurityProfile[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'securityProfiles'),
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        ...(d.data() as Omit<SecurityProfile, 'userId'>),
+        userId: d.id,
+      }));
+      list.sort((a, b) => b.riskScore - a.riskScore);
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityProfiles');
+    }
+  );
+}
+
+export function subscribeSecurityCasesForAdmin(
+  onUpdate: (casesMap: Record<string, SecurityCase>) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'securityCases'),
+    (snap) => {
+      const map: Record<string, SecurityCase> = {};
+      snap.docs.forEach((d) => {
+        map[d.id] = {
+          ...(d.data() as Omit<SecurityCase, 'userId'>),
+          userId: d.id,
+        };
+      });
+      onUpdate(map);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityCases');
+    }
+  );
+}
+
+export function subscribeSecurityEventsForAdmin(
+  onUpdate: (events: SecurityEventRecord[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const q = query(collection(db, 'securityEvents'), orderBy('createdAt', 'desc'), limit(250));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SecurityEventRecord, 'id'>),
+      }));
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityEvents');
+    }
+  );
+}
+
+export function subscribeSecurityAppealsForAdmin(
+  onUpdate: (appeals: SecurityAppeal[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'securityAppeals'),
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SecurityAppeal, 'id'>),
+      }));
+      list.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityAppeals');
+    }
+  );
+}
+
+export function subscribeSecurityAuditLogsForAdmin(
+  onUpdate: (logs: SecurityAuditLog[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const q = query(collection(db, 'securityAuditLogs'), orderBy('createdAt', 'desc'), limit(200));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<SecurityAuditLog, 'id'>),
+      }));
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'securityAuditLogs');
+    }
+  );
+}
+
+export function subscribeUserVipSubscription(
+  uid: string,
+  onUpdate: (sub: VipSubscription | null) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const ref = doc(db, 'vipSubscriptions', uid);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      onUpdate({
+        ...(snap.data() as Omit<VipSubscription, 'userId'>),
+        userId: snap.id,
+      });
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.GET, `vipSubscriptions/${uid}`);
+    }
+  );
+}
+
+export function subscribeUserAiUsage(
+  uid: string,
+  onUpdate: (usage: AiUsageRecord | null) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const ref = doc(db, 'aiUsage', uid);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onUpdate(null);
+        return;
+      }
+      onUpdate({
+        ...(snap.data() as Omit<AiUsageRecord, 'userId'>),
+        userId: snap.id,
+      });
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.GET, `aiUsage/${uid}`);
+    }
+  );
+}
+
+export function subscribeAllVipSubscriptionsForAdmin(
+  onUpdate: (subsMap: Record<string, VipSubscription>) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'vipSubscriptions'),
+    (snap) => {
+      const map: Record<string, VipSubscription> = {};
+      snap.docs.forEach((d) => {
+        map[d.id] = {
+          ...(d.data() as Omit<VipSubscription, 'userId'>),
+          userId: d.id,
+        };
+      });
+      onUpdate(map);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'vipSubscriptions');
+    }
+  );
+}
+
+export function subscribeAllAiUsageForAdmin(
+  onUpdate: (usageMap: Record<string, AiUsageRecord>) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'aiUsage'),
+    (snap) => {
+      const map: Record<string, AiUsageRecord> = {};
+      snap.docs.forEach((d) => {
+        map[d.id] = {
+          ...(d.data() as Omit<AiUsageRecord, 'userId'>),
+          userId: d.id,
+        };
+      });
+      onUpdate(map);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'aiUsage');
+    }
+  );
+}
+
+export interface ExecuteSecurityActionParams {
+  targetUser: UserProfile;
+  existingProfile?: SecurityProfile | null;
+  actionType: SecurityAdminActionType;
+  reason: string;
+  durationMs?: number;
+  durationLabel?: string;
+  sendDirectMessage?: boolean;
+  directMessageText?: string;
+  nextVipStatus?: VipStatus;
+  nextVipTier?: VipTier;
+  nextBillingCycle?: BillingCycle;
+  resetAiQuota?: boolean;
+  riskScoreOverride?: number;
+  riskLevelOverride?: SecurityRiskLevel;
+}
+
+export async function executeSecurityAdminAction(
+  params: ExecuteSecurityActionParams
+): Promise<void> {
+  const { targetUser, existingProfile, actionType } = params;
+  const targetUid = targetUser.uid;
+  const reason = clampStr(params.reason, 500);
+  const durationMs = Math.max(0, Math.round(params.durationMs || 0));
+  const durationLabel = clampStr(params.durationLabel || '', 64);
+
+  if (targetUser.email?.toLowerCase() === ADMIN_EMAIL) {
+    throw new Error('Administrator account cannot be restricted or banned.');
+  }
+  if (actionType === 'perm_ban' && reason.length < 5) {
+    throw new Error('A documented reason (at least 5 characters) is required for permanent bans.');
+  }
+  if (actionType === 'temp_ban' && durationMs <= 0) {
+    throw new Error('A valid temporary ban duration (hh:mm:ss) is required.');
+  }
+
+  const profileRef = doc(db, 'securityProfiles', targetUid);
+  const existingSnap = await getDoc(profileRef);
+  const prevData = existingSnap.exists()
+    ? ({ ...(existingSnap.data() as SecurityProfile), userId: targetUid } as SecurityProfile)
+    : existingProfile || null;
+
+  const nowMs = Date.now();
+  let restrictionStatus: RestrictionStatus = prevData?.restrictionStatus || 'active';
+  let banType: BanType = prevData?.banType || 'none';
+  let banReason = prevData?.banReason || '';
+  let banDurationLabel = prevData?.banDurationLabel || '';
+  let banDurationMs = prevData?.banDurationMs || 0;
+  let banStartedAt: Timestamp | null = prevData?.banStartedAt ?? null;
+  let banExpiresAt: Timestamp | null = prevData?.banExpiresAt ?? null;
+  let aiRestrictedUntil: Timestamp | null = prevData?.aiRestrictedUntil ?? null;
+  let messagingRestrictedUntil: Timestamp | null = prevData?.messagingRestrictedUntil ?? null;
+  let warningCount = prevData?.warningCount || 0;
+  let lastWarningAt: Timestamp | null = prevData?.lastWarningAt ?? null;
+  let underInvestigation = prevData?.underInvestigation ?? false;
+  let vipStatus: VipStatus = prevData?.vipStatus || 'none';
+  const riskScore =
+    typeof params.riskScoreOverride === 'number'
+      ? Math.max(0, Math.min(100, Math.round(params.riskScoreOverride)))
+      : prevData?.riskScore || 0;
+  const riskLevel: SecurityRiskLevel = params.riskLevelOverride || prevData?.riskLevel || 'low';
+  const eventCount = prevData?.eventCount || 0;
+  const lastEventAt: Timestamp | null = prevData?.lastEventAt ?? null;
+
+  let auditDetails = '';
+  let shouldReactivateUserProfile = false;
+
+  switch (actionType) {
+    case 'send_warning': {
+      warningCount += 1;
+      lastWarningAt = Timestamp.fromMillis(nowMs);
+      auditDetails = `Official security warning #${warningCount} issued.`;
+      break;
+    }
+    case 'restrict_ai': {
+      const dur = durationMs > 0 ? durationMs : 24 * 3600 * 1000;
+      aiRestrictedUntil = Timestamp.fromMillis(nowMs + dur);
+      auditDetails = `AI access restricted for ${durationLabel || '24:00:00'}.`;
+      break;
+    }
+    case 'clear_ai_restriction': {
+      aiRestrictedUntil = null;
+      auditDetails = 'AI access restriction lifted.';
+      break;
+    }
+    case 'restrict_messaging': {
+      const dur = durationMs > 0 ? durationMs : 24 * 3600 * 1000;
+      messagingRestrictedUntil = Timestamp.fromMillis(nowMs + dur);
+      auditDetails = `Messaging restricted for ${durationLabel || '24:00:00'}.`;
+      break;
+    }
+    case 'clear_messaging_restriction': {
+      messagingRestrictedUntil = null;
+      auditDetails = 'Messaging restriction lifted.';
+      break;
+    }
+    case 'temp_ban': {
+      restrictionStatus = 'temp_banned';
+      banType = 'temporary';
+      banReason = reason || 'Temporary security ban enforced by FinTrack Admin.';
+      banDurationMs = durationMs;
+      banDurationLabel = durationLabel || '24:00:00';
+      banStartedAt = Timestamp.fromMillis(nowMs);
+      banExpiresAt = Timestamp.fromMillis(nowMs + durationMs);
+      underInvestigation = false;
+      auditDetails = `Temporary ban applied (${banDurationLabel}). User financial data preserved.`;
+      break;
+    }
+    case 'perm_ban': {
+      restrictionStatus = 'perm_banned';
+      banType = 'permanent';
+      banReason = reason;
+      banDurationMs = 0;
+      banDurationLabel = 'Permanent';
+      banStartedAt = Timestamp.fromMillis(nowMs);
+      banExpiresAt = null;
+      underInvestigation = false;
+      auditDetails = 'Permanent account ban confirmed by administrator. User financial data & evidence preserved.';
+      break;
+    }
+    case 'reactivate_account': {
+      restrictionStatus = 'active';
+      banType = 'none';
+      banReason = '';
+      banDurationMs = 0;
+      banDurationLabel = '';
+      banStartedAt = null;
+      banExpiresAt = null;
+      aiRestrictedUntil = null;
+      messagingRestrictedUntil = null;
+      underInvestigation = false;
+      shouldReactivateUserProfile = true;
+      auditDetails = 'Account reactivated and all bans/restrictions cleared.';
+      break;
+    }
+    case 'mark_under_investigation': {
+      if (banType === 'none') {
+        restrictionStatus = 'under_investigation';
+      }
+      underInvestigation = true;
+      auditDetails = 'Account flagged for manual administrator investigation.';
+      break;
+    }
+    case 'resolve_investigation': {
+      underInvestigation = false;
+      if (restrictionStatus === 'under_investigation') {
+        restrictionStatus = 'active';
+      }
+      auditDetails = 'Investigation resolved.';
+      break;
+    }
+    case 'update_vip_status': {
+      const targetTier: VipTier =
+        params.nextVipTier || (params.nextVipStatus === 'none' ? 'starter' : 'gold');
+      vipStatus = targetTier === 'starter' ? 'none' : 'vip';
+      auditDetails = `VIP membership updated to "${VIP_TIER_CONFIGS[targetTier].classLabel} (${VIP_TIER_CONFIGS[targetTier].name})" (${params.nextBillingCycle || 'monthly'}).`;
+      break;
+    }
+    default:
+      break;
+  }
+
+  const batch = writeBatch(db);
+  const cleanEmail = clampStr(targetUser.email, 160) || 'user@fintrack.app';
+  const cleanDisplayName = clampStr(targetUser.displayName, 100) || 'FinTrack User';
+
+  if (!existingSnap.exists()) {
+    batch.set(profileRef, {
+      userId: targetUid,
+      userEmail: cleanEmail,
+      displayName: cleanDisplayName,
+      restrictionStatus,
+      banType,
+      banReason,
+      banDurationLabel,
+      banDurationMs,
+      banStartedAt,
+      banExpiresAt,
+      aiRestrictedUntil,
+      messagingRestrictedUntil,
+      warningCount,
+      lastWarningAt,
+      riskLevel,
+      riskScore,
+      underInvestigation,
+      vipStatus,
+      eventCount,
+      lastEventAt,
+      updatedBy: ADMIN_EMAIL,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(profileRef, {
+      userEmail: cleanEmail,
+      displayName: cleanDisplayName,
+      restrictionStatus,
+      banType,
+      banReason,
+      banDurationLabel,
+      banDurationMs,
+      banStartedAt,
+      banExpiresAt,
+      aiRestrictedUntil,
+      messagingRestrictedUntil,
+      warningCount,
+      lastWarningAt,
+      riskLevel,
+      riskScore,
+      underInvestigation,
+      vipStatus,
+      eventCount,
+      lastEventAt,
+      updatedBy: ADMIN_EMAIL,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  if (actionType === 'update_vip_status') {
+    const targetTier: VipTier =
+      params.nextVipTier || (params.nextVipStatus === 'none' ? 'starter' : 'gold');
+    const cycle: BillingCycle = params.nextBillingCycle || 'monthly';
+    const tierSpec = VIP_TIER_CONFIGS[targetTier];
+    const priceInr = tierSpec.pricesInr[cycle];
+    const cycleDays = BILLING_CYCLE_LABELS[cycle].days;
+    const periodKey = `sub-${Math.floor(nowMs / 1000)}-c0`;
+    const subRef = doc(db, 'vipSubscriptions', targetUid);
+    const existingSubSnap = await getDoc(subRef);
+    const subPayload = {
+      userId: targetUid,
+      tier: targetTier,
+      billingCycle: cycle,
+      status: 'active',
+      priceInr,
+      paymentReference: `ADMIN-${Math.floor(nowMs / 1000)}`,
+      periodKey,
+      periodStartAt: serverTimestamp(),
+      periodEndAt: Timestamp.fromMillis(nowMs + cycleDays * 24 * 60 * 60 * 1000),
+      autoRenew: true,
+      updatedBy: ADMIN_EMAIL,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!existingSubSnap.exists()) {
+      batch.set(subRef, {
+        ...subPayload,
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      batch.update(subRef, subPayload);
+    }
+
+    if (params.resetAiQuota !== false) {
+      const monthEndMs = nowMs + 30 * 24 * 60 * 60 * 1000;
+      batch.set(doc(db, 'aiUsage', targetUid), {
+        userId: targetUid,
+        tier: targetTier,
+        periodKey,
+        periodStartAt: Timestamp.fromMillis(nowMs),
+        periodEndAt: Timestamp.fromMillis(monthEndMs),
+        insightsUsed: 0,
+        insightsLimit: tierSpec.insightsLimit,
+        advisorUsed: 0,
+        advisorLimit: tierSpec.advisorLimit,
+        forecastUsed: 0,
+        lastResetAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  if (shouldReactivateUserProfile && targetUser.accountStatus === 'deactivated') {
+    batch.update(doc(db, 'users', targetUid), {
+      accountStatus: 'active',
+      deactivatedAt: null,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const auditId = generateDocId();
+  batch.set(doc(db, 'securityAuditLogs', auditId), {
+    targetUserId: targetUid,
+    targetUserEmail: cleanEmail,
+    adminEmail: ADMIN_EMAIL,
+    actionType,
+    reason,
+    details: clampStr(auditDetails, 1000),
+    durationLabel: durationLabel || (actionType === 'perm_ban' ? 'Permanent' : ''),
+    createdAt: serverTimestamp(),
+  });
+
+  if (params.sendDirectMessage) {
+    const msgText = clampStr(
+      params.directMessageText || reason || auditDetails,
+      1500
+    );
+    if (msgText) {
+      const msgId = generateDocId();
+      batch.set(doc(db, 'users', targetUid, 'adminMessages', msgId), {
+        userId: targetUid,
+        heading: DEFAULT_ADMIN_MESSAGE_HEADING,
+        message: msgText,
+        senderEmail: ADMIN_EMAIL,
+        isRead: false,
+        readAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `securityProfiles/${targetUid}`);
+  }
+}
+
+export async function saveSecurityCaseNotes(params: {
+  targetUid: string;
+  targetEmail: string;
+  internalNotes: string;
+  evidenceSummary: string;
+}): Promise<void> {
+  const caseRef = doc(db, 'securityCases', params.targetUid);
+  const existing = await getDoc(caseRef);
+  const cleanNotes = clampStr(params.internalNotes, 3000);
+  const cleanEvidence = clampStr(params.evidenceSummary, 2000);
+
+  const batch = writeBatch(db);
+  if (!existing.exists()) {
+    batch.set(caseRef, {
+      userId: params.targetUid,
+      internalNotes: cleanNotes,
+      evidenceSummary: cleanEvidence,
+      lastReviewedBy: ADMIN_EMAIL,
+      lastReviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    batch.update(caseRef, {
+      internalNotes: cleanNotes,
+      evidenceSummary: cleanEvidence,
+      lastReviewedBy: ADMIN_EMAIL,
+      lastReviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const auditId = generateDocId();
+  batch.set(doc(db, 'securityAuditLogs', auditId), {
+    targetUserId: params.targetUid,
+    targetUserEmail: clampStr(params.targetEmail, 160),
+    adminEmail: ADMIN_EMAIL,
+    actionType: 'update_internal_notes',
+    reason: 'Admin internal investigation notes updated',
+    details: 'Updated case evidence summary and private admin notes.',
+    durationLabel: '',
+    createdAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `securityCases/${params.targetUid}`);
+  }
+}
+
+export async function submitSecurityAppeal(input: {
+  userId: string;
+  userEmail: string;
+  displayName: string;
+  banType: BanType;
+  banReason: string;
+  appealReason: string;
+  explanation: string;
+}): Promise<string> {
+  const appealReason = clampStr(input.appealReason, 160);
+  const explanation = clampStr(input.explanation, 1500);
+  if (appealReason.length < 3) {
+    throw new Error('Please choose or enter an appeal reason (at least 3 characters).');
+  }
+  if (explanation.length < 10) {
+    throw new Error('Please provide a clear explanation (at least 10 characters).');
+  }
+
+  const msgCheck = analyzeMessageSecurity(`${appealReason} ${explanation}`, input.userId);
+  if (msgCheck.flagged && msgCheck.violationType) {
+    void logClientSecurityEvent({
+      userId: input.userId,
+      userEmail: input.userEmail,
+      category: 'messaging_security',
+      eventType: msgCheck.violationType,
+      riskLevel: msgCheck.riskLevel,
+      summary: `Blocked unsafe appeal submission: ${msgCheck.reason}`,
+      evidence: `violation=${msgCheck.violationType}`,
+    });
+    throw new Error(msgCheck.reason);
+  }
+
+  const id = generateDocId();
+  const path = `securityAppeals/${id}`;
+  try {
+    await setDoc(doc(db, 'securityAppeals', id), {
+      userId: input.userId,
+      userEmail: clampStr(input.userEmail, 160) || 'user@fintrack.app',
+      displayName: clampStr(input.displayName, 100) || 'FinTrack User',
+      banType: input.banType,
+      banReason: clampStr(input.banReason, 500),
+      appealReason,
+      explanation,
+      status: 'pending' as AppealStatus,
+      adminDecisionNote: '',
+      reviewedBy: '',
+      reviewedAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function reviewSecurityAppeal(params: {
+  appeal: SecurityAppeal;
+  targetUser?: UserProfile | null;
+  status: Exclude<AppealStatus, 'pending'>;
+  adminDecisionNote: string;
+  reactivateOnApprove?: boolean;
+  sendDirectMessage?: boolean;
+}): Promise<void> {
+  const { appeal, status, targetUser } = params;
+  const note = clampStr(params.adminDecisionNote, 1000);
+  if (!note) {
+    throw new Error('Please enter a decision note before updating the appeal.');
+  }
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'securityAppeals', appeal.id), {
+    status,
+    adminDecisionNote: note,
+    reviewedBy: ADMIN_EMAIL,
+    reviewedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  if (status === 'approved' && params.reactivateOnApprove) {
+    const profileRef = doc(db, 'securityProfiles', appeal.userId);
+    const secSnap = await getDoc(profileRef);
+    if (secSnap.exists()) {
+      batch.update(profileRef, {
+        userEmail: clampStr(appeal.userEmail, 160),
+        displayName: clampStr(appeal.displayName, 100),
+        restrictionStatus: 'active',
+        banType: 'none',
+        banReason: '',
+        banDurationLabel: '',
+        banDurationMs: 0,
+        banStartedAt: null,
+        banExpiresAt: null,
+        aiRestrictedUntil: null,
+        messagingRestrictedUntil: null,
+        underInvestigation: false,
+        updatedBy: ADMIN_EMAIL,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    if (!targetUser || targetUser.accountStatus === 'deactivated') {
+      batch.update(doc(db, 'users', appeal.userId), {
+        accountStatus: 'active',
+        deactivatedAt: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  const auditId = generateDocId();
+  batch.set(doc(db, 'securityAuditLogs', auditId), {
+    targetUserId: appeal.userId,
+    targetUserEmail: clampStr(appeal.userEmail, 160),
+    adminEmail: ADMIN_EMAIL,
+    actionType: 'review_appeal',
+    reason: note,
+    details: `Appeal ${appeal.id} marked "${status}"${
+      status === 'approved' && params.reactivateOnApprove ? ' and account reactivated' : ''
+    }.`,
+    durationLabel: '',
+    createdAt: serverTimestamp(),
+  });
+
+  if (params.sendDirectMessage) {
+    const msgId = generateDocId();
+    batch.set(doc(db, 'users', appeal.userId, 'adminMessages', msgId), {
+      userId: appeal.userId,
+      heading: DEFAULT_ADMIN_MESSAGE_HEADING,
+      message: clampStr(`Appeal Update (${status.toUpperCase()}): ${note}`, 1500),
+      senderEmail: ADMIN_EMAIL,
+      isRead: false,
+      readAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `securityAppeals/${appeal.id}`);
+  }
+}
+
+// --- VIP UPI Payment Requests & Admin Verification ---
+export function subscribeUserVipPaymentRequests(
+  uid: string,
+  onUpdate: (requests: VipPaymentRequest[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  const q = query(collection(db, 'vipPaymentRequests'), where('userId', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<VipPaymentRequest, 'id'>),
+      }));
+      list.sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'vipPaymentRequests');
+    }
+  );
+}
+
+export function subscribeAllVipPaymentRequestsForAdmin(
+  onUpdate: (requests: VipPaymentRequest[]) => void,
+  onError?: (error: unknown) => void
+): () => void {
+  return onSnapshot(
+    collection(db, 'vipPaymentRequests'),
+    (snap) => {
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<VipPaymentRequest, 'id'>),
+      }));
+      list.sort((a, b) => {
+        if (a.status === 'pending' && b.status !== 'pending') return -1;
+        if (a.status !== 'pending' && b.status === 'pending') return 1;
+        return (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0);
+      });
+      onUpdate(list);
+    },
+    (error) => {
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, 'vipPaymentRequests');
+    }
+  );
+}
+
+export async function reviewVipPaymentRequest(params: {
+  request: VipPaymentRequest;
+  decision: 'approved' | 'rejected';
+  adminNote?: string;
+}): Promise<void> {
+  const { request, decision } = params;
+  if (request.status !== 'pending') {
+    throw new Error('This VIP payment request has already been reviewed.');
+  }
+
+  const cleanNote = clampStr(params.adminNote || '', 500);
+  if (decision === 'rejected' && cleanNote.length < 3) {
+    throw new Error('Please enter a short reason before rejecting the payment request.');
+  }
+
+  const nowMs = Date.now();
+  const batch = writeBatch(db);
+  const reqRef = doc(db, 'vipPaymentRequests', request.id);
+
+  batch.update(reqRef, {
+    status: decision,
+    adminNote: cleanNote,
+    reviewedBy: ADMIN_EMAIL,
+    reviewedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  const tierSpec = VIP_TIER_CONFIGS[request.tier];
+  const cycleSpec = BILLING_CYCLE_LABELS[request.billingCycle];
+  const cleanEmail = clampStr(request.userEmail, 160) || 'user@fintrack.app';
+  const cleanDisplayName = clampStr(request.displayName, 100) || 'FinTrack User';
+
+  if (decision === 'approved') {
+    const periodKey = `sub-${Math.floor(nowMs / 1000)}-c0`;
+    const subRef = doc(db, 'vipSubscriptions', request.userId);
+    const existingSubSnap = await getDoc(subRef);
+    const subPaymentRef = clampStr(
+      `FTVIP-${request.paymentReference.replace(/^FTPAY-/, '')}`,
+      100
+    );
+
+    const subPayload = {
+      userId: request.userId,
+      tier: request.tier,
+      billingCycle: request.billingCycle,
+      status: 'active',
+      priceInr: request.amountInr,
+      paymentReference: subPaymentRef,
+      periodKey,
+      periodStartAt: serverTimestamp(),
+      periodEndAt: Timestamp.fromMillis(nowMs + cycleSpec.days * 24 * 60 * 60 * 1000),
+      autoRenew: true,
+      updatedBy: ADMIN_EMAIL,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (!existingSubSnap.exists()) {
+      batch.set(subRef, {
+        ...subPayload,
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      batch.update(subRef, subPayload);
+    }
+
+    const monthEndMs = nowMs + 30 * 24 * 60 * 60 * 1000;
+    batch.set(doc(db, 'aiUsage', request.userId), {
+      userId: request.userId,
+      tier: request.tier,
+      periodKey,
+      periodStartAt: Timestamp.fromMillis(nowMs),
+      periodEndAt: Timestamp.fromMillis(monthEndMs),
+      insightsUsed: 0,
+      insightsLimit: tierSpec.insightsLimit,
+      advisorUsed: 0,
+      advisorLimit: tierSpec.advisorLimit,
+      forecastUsed: 0,
+      lastResetAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    const secRef = doc(db, 'securityProfiles', request.userId);
+    const secSnap = await getDoc(secRef);
+    const nextVipStatus: VipStatus = request.tier === 'starter' ? 'none' : 'vip';
+
+    if (!secSnap.exists()) {
+      batch.set(secRef, {
+        userId: request.userId,
+        userEmail: cleanEmail,
+        displayName: cleanDisplayName,
+        restrictionStatus: 'active',
+        banType: 'none',
+        banReason: '',
+        banDurationLabel: '',
+        banDurationMs: 0,
+        banStartedAt: null,
+        banExpiresAt: null,
+        aiRestrictedUntil: null,
+        messagingRestrictedUntil: null,
+        warningCount: 0,
+        lastWarningAt: null,
+        riskLevel: 'low',
+        riskScore: 0,
+        underInvestigation: false,
+        vipStatus: nextVipStatus,
+        eventCount: 0,
+        lastEventAt: null,
+        updatedBy: ADMIN_EMAIL,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      batch.update(secRef, {
+        vipStatus: nextVipStatus,
+        updatedBy: ADMIN_EMAIL,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  const auditId = generateDocId();
+  batch.set(doc(db, 'securityAuditLogs', auditId), {
+    targetUserId: request.userId,
+    targetUserEmail: cleanEmail,
+    adminEmail: ADMIN_EMAIL,
+    actionType: 'update_vip_status',
+    reason: clampStr(
+      cleanNote ||
+        (decision === 'approved'
+          ? `Confirmed UPI payment (UTR: ${request.utrReference}) to ${request.upiId}`
+          : `Rejected UPI payment (UTR: ${request.utrReference})`),
+      500
+    ),
+    details: clampStr(
+      `${decision === 'approved' ? 'Approved' : 'Rejected'} ${tierSpec.classLabel} ${tierSpec.name} (${cycleSpec.label}, ₹${request.amountInr}) · Ref ${request.paymentReference} · UTR ${request.utrReference}`,
+      1000
+    ),
+    durationLabel: cycleSpec.label,
+    createdAt: serverTimestamp(),
+  });
+
+  const msgId = generateDocId();
+  const userMessage =
+    decision === 'approved'
+      ? `Your UPI payment of ₹${request.amountInr} (UTR: ${request.utrReference}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) has been CONFIRMED. Your VIP features are now active.${cleanNote ? ` Admin note: ${cleanNote}` : ''}`
+      : `Your UPI payment verification request of ₹${request.amountInr} (UTR: ${request.utrReference}) for ${tierSpec.classLabel} — ${tierSpec.name} (${cycleSpec.label}) was REJECTED.${cleanNote ? ` Reason: ${cleanNote}` : ''} VIP features remain locked.`;
+
+  batch.set(doc(db, 'users', request.userId, 'adminMessages', msgId), {
+    userId: request.userId,
+    heading: decision === 'approved' ? 'VIP PAYMENT CONFIRMED' : 'VIP PAYMENT REJECTED',
+    message: clampStr(userMessage, 1500),
+    senderEmail: ADMIN_EMAIL,
+    isRead: false,
+    readAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `vipPaymentRequests/${request.id}`);
   }
 }

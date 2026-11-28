@@ -26,10 +26,46 @@ service cloud.firestore {
         && request.auth.token.email == 'maind.go2000@gmail.com';
     }
 
+    function isNotBanned(userId) {
+      return !exists(/databases/$(database)/documents/securityProfiles/$(userId))
+        || get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banType == 'none'
+        || (
+          get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banType == 'temporary'
+          && get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banExpiresAt != null
+          && get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banExpiresAt <= request.time
+        );
+    }
+
+    function isNotMessagingRestricted(userId) {
+      return !exists(/databases/$(database)/documents/securityProfiles/$(userId))
+        || get(/databases/$(database)/documents/securityProfiles/$(userId)).data.messagingRestrictedUntil == null
+        || get(/databases/$(database)/documents/securityProfiles/$(userId)).data.messagingRestrictedUntil <= request.time;
+    }
+
+    function isBannedOrDeactivated(userId) {
+      return (
+        exists(/databases/$(database)/documents/users/$(userId))
+        && 'accountStatus' in get(/databases/$(database)/documents/users/$(userId)).data
+        && get(/databases/$(database)/documents/users/$(userId)).data.accountStatus == 'deactivated'
+      ) || (
+        exists(/databases/$(database)/documents/securityProfiles/$(userId))
+        && (
+          get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banType == 'permanent'
+          || (
+            get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banType == 'temporary'
+            && get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banExpiresAt != null
+            && get(/databases/$(database)/documents/securityProfiles/$(userId)).data.banExpiresAt > request.time
+          )
+        )
+      );
+    }
+
     function isActiveAccount(userId) {
-      return !exists(/databases/$(database)/documents/users/$(userId))
+      return (
+        !exists(/databases/$(database)/documents/users/$(userId))
         || !('accountStatus' in get(/databases/$(database)/documents/users/$(userId)).data)
-        || get(/databases/$(database)/documents/users/$(userId)).data.accountStatus == 'active';
+        || get(/databases/$(database)/documents/users/$(userId)).data.accountStatus == 'active'
+      ) && isNotBanned(userId);
     }
 
     function isValidId(id) {
@@ -240,6 +276,195 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidSecurityProfile(data, userId) {
+      return data.keys().hasAll(['userId', 'userEmail', 'displayName', 'restrictionStatus', 'banType', 'banReason', 'banDurationLabel', 'banDurationMs', 'banStartedAt', 'banExpiresAt', 'aiRestrictedUntil', 'messagingRestrictedUntil', 'warningCount', 'lastWarningAt', 'riskLevel', 'riskScore', 'underInvestigation', 'vipStatus', 'eventCount', 'lastEventAt', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'userEmail', 'displayName', 'restrictionStatus', 'banType', 'banReason', 'banDurationLabel', 'banDurationMs', 'banStartedAt', 'banExpiresAt', 'aiRestrictedUntil', 'messagingRestrictedUntil', 'warningCount', 'lastWarningAt', 'riskLevel', 'riskScore', 'underInvestigation', 'vipStatus', 'eventCount', 'lastEventAt', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.restrictionStatus in ['active', 'under_investigation', 'temp_banned', 'perm_banned']
+        && data.banType in ['none', 'temporary', 'permanent']
+        && data.banReason is string && data.banReason.size() <= 500
+        && data.banDurationLabel is string && data.banDurationLabel.size() <= 64
+        && data.banDurationMs is number && data.banDurationMs >= 0 && data.banDurationMs <= 315360000000
+        && (data.banStartedAt == null || data.banStartedAt is timestamp)
+        && (data.banExpiresAt == null || data.banExpiresAt is timestamp)
+        && (data.aiRestrictedUntil == null || data.aiRestrictedUntil is timestamp)
+        && (data.messagingRestrictedUntil == null || data.messagingRestrictedUntil is timestamp)
+        && data.warningCount is number && data.warningCount >= 0 && data.warningCount <= 10000
+        && (data.lastWarningAt == null || data.lastWarningAt is timestamp)
+        && data.riskLevel in ['low', 'medium', 'high', 'critical']
+        && data.riskScore is number && data.riskScore >= 0 && data.riskScore <= 100
+        && data.underInvestigation is bool
+        && data.vipStatus in ['none', 'vip']
+        && data.eventCount is number && data.eventCount >= 0 && data.eventCount <= 1000000
+        && (data.lastEventAt == null || data.lastEventAt is timestamp)
+        && data.updatedBy is string && data.updatedBy.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityCase(data, userId) {
+      return data.keys().hasAll(['userId', 'internalNotes', 'evidenceSummary', 'lastReviewedBy', 'lastReviewedAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'internalNotes', 'evidenceSummary', 'lastReviewedBy', 'lastReviewedAt', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && data.internalNotes is string && data.internalNotes.size() <= 3000
+        && data.evidenceSummary is string && data.evidenceSummary.size() <= 2000
+        && data.lastReviewedBy is string && data.lastReviewedBy.size() <= 160
+        && (data.lastReviewedAt == null || data.lastReviewedAt is timestamp)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityEvent(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'category', 'eventType', 'riskLevel', 'riskScore', 'summary', 'evidence', 'source', 'status', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'userEmail', 'category', 'eventType', 'riskLevel', 'riskScore', 'summary', 'evidence', 'source', 'status', 'createdAt'])
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() <= 160
+        && data.category in ['account_security', 'vip_payment_security', 'api_backend_security', 'data_security', 'messaging_security']
+        && data.eventType is string && data.eventType.size() >= 3 && data.eventType.size() <= 64
+        && data.riskLevel in ['low', 'medium', 'high', 'critical']
+        && data.riskScore is number && data.riskScore >= 0 && data.riskScore <= 100
+        && data.summary is string && data.summary.size() >= 3 && data.summary.size() <= 300
+        && data.evidence is string && data.evidence.size() <= 1500
+        && data.source in ['client', 'backend', 'admin']
+        && data.status in ['open', 'reviewed', 'dismissed']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSecurityAppeal(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'displayName', 'banType', 'banReason', 'appealReason', 'explanation', 'status', 'adminDecisionNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'userEmail', 'displayName', 'banType', 'banReason', 'appealReason', 'explanation', 'status', 'adminDecisionNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.banType in ['temporary', 'permanent', 'none']
+        && data.banReason is string && data.banReason.size() <= 500
+        && data.appealReason is string && data.appealReason.size() >= 3 && data.appealReason.size() <= 160
+        && data.explanation is string && data.explanation.size() >= 10 && data.explanation.size() <= 1500
+        && data.status in ['pending', 'under_review', 'approved', 'rejected']
+        && data.adminDecisionNote is string && data.adminDecisionNote.size() <= 1000
+        && data.reviewedBy is string && data.reviewedBy.size() <= 160
+        && (data.reviewedAt == null || data.reviewedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityAuditLog(data) {
+      return data.keys().hasAll(['targetUserId', 'targetUserEmail', 'adminEmail', 'actionType', 'reason', 'details', 'durationLabel', 'createdAt'])
+        && data.keys().hasOnly(['targetUserId', 'targetUserEmail', 'adminEmail', 'actionType', 'reason', 'details', 'durationLabel', 'createdAt'])
+        && isValidId(data.targetUserId)
+        && data.targetUserEmail is string && data.targetUserEmail.size() <= 160
+        && data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 160
+        && data.actionType is string && data.actionType.size() >= 3 && data.actionType.size() <= 64
+        && data.reason is string && data.reason.size() <= 500
+        && data.details is string && data.details.size() <= 1000
+        && data.durationLabel is string && data.durationLabel.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVipPrice(tier, cycle, price) {
+      return (tier == 'starter' && ((cycle == 'monthly' && price == 39) || (cycle == 'quarterly' && price == 99) || (cycle == 'yearly' && price == 129)))
+        || (tier == 'silver' && ((cycle == 'monthly' && price == 49) || (cycle == 'quarterly' && price == 129) || (cycle == 'yearly' && price == 499)))
+        || (tier == 'gold' && ((cycle == 'monthly' && price == 59) || (cycle == 'quarterly' && price == 149) || (cycle == 'yearly' && price == 599)))
+        || (tier == 'diamond' && ((cycle == 'monthly' && price == 69) || (cycle == 'quarterly' && price == 179) || (cycle == 'yearly' && price == 699)));
+    }
+
+    function isValidVipSubscription(data, userId) {
+      return data.keys().hasAll(['userId', 'tier', 'billingCycle', 'status', 'priceInr', 'paymentReference', 'periodKey', 'periodStartAt', 'periodEndAt', 'autoRenew', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'tier', 'billingCycle', 'status', 'priceInr', 'paymentReference', 'periodKey', 'periodStartAt', 'periodEndAt', 'autoRenew', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && data.tier in ['starter', 'silver', 'gold', 'diamond']
+        && data.billingCycle in ['monthly', 'quarterly', 'yearly']
+        && data.status in ['active', 'expired', 'cancelled']
+        && data.priceInr is number
+        && isValidVipPrice(data.tier, data.billingCycle, data.priceInr)
+        && data.paymentReference is string && data.paymentReference.size() >= 3 && data.paymentReference.size() <= 100
+        && data.paymentReference.matches('^(FTVIP|ADMIN)-[a-zA-Z0-9_\\-]+$')
+        && data.periodKey is string && data.periodKey.size() >= 4 && data.periodKey.size() <= 40
+        && data.periodStartAt is timestamp
+        && data.periodEndAt is timestamp
+        && data.autoRenew is bool
+        && data.updatedBy is string && data.updatedBy.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAiUsage(data, userId) {
+      return data.keys().hasAll(['userId', 'tier', 'periodKey', 'periodStartAt', 'periodEndAt', 'insightsUsed', 'insightsLimit', 'advisorUsed', 'advisorLimit', 'forecastUsed', 'lastResetAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'tier', 'periodKey', 'periodStartAt', 'periodEndAt', 'insightsUsed', 'insightsLimit', 'advisorUsed', 'advisorLimit', 'forecastUsed', 'lastResetAt', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && data.tier in ['starter', 'silver', 'gold', 'diamond']
+        && data.periodKey is string && data.periodKey.size() >= 4 && data.periodKey.size() <= 40
+        && data.periodStartAt is timestamp
+        && data.periodEndAt is timestamp
+        && data.insightsUsed is number && data.insightsUsed >= 0 && data.insightsUsed <= 10000
+        && data.insightsLimit is number && data.insightsLimit >= 0 && data.insightsLimit <= 10000
+        && ((data.tier == 'starter' && data.insightsLimit == 0 && data.advisorLimit == 0)
+          || (data.tier == 'silver' && data.insightsLimit == 10 && data.advisorLimit == 0)
+          || (data.tier == 'gold' && data.insightsLimit == 30 && data.advisorLimit == 50)
+          || (data.tier == 'diamond' && data.insightsLimit == 100 && data.advisorLimit == 200))
+        && data.advisorUsed is number && data.advisorUsed >= 0 && data.advisorUsed <= 10000
+        && data.advisorLimit is number && data.advisorLimit >= 0 && data.advisorLimit <= 10000
+        && data.forecastUsed is number && data.forecastUsed >= 0 && data.forecastUsed <= 10000
+        && data.lastResetAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function hasAuthorizedAiTier(userId, tier) {
+      return (
+        exists(/databases/$(database)/documents/vipSubscriptions/$(userId))
+        && get(/databases/$(database)/documents/vipSubscriptions/$(userId)).data.status == 'active'
+        && get(/databases/$(database)/documents/vipSubscriptions/$(userId)).data.periodEndAt > request.time
+        && tier == get(/databases/$(database)/documents/vipSubscriptions/$(userId)).data.tier
+      ) || (
+        (
+          !exists(/databases/$(database)/documents/vipSubscriptions/$(userId))
+          || get(/databases/$(database)/documents/vipSubscriptions/$(userId)).data.status != 'active'
+          || get(/databases/$(database)/documents/vipSubscriptions/$(userId)).data.periodEndAt <= request.time
+        )
+        && (
+          (
+            exists(/databases/$(database)/documents/securityProfiles/$(userId))
+            && get(/databases/$(database)/documents/securityProfiles/$(userId)).data.vipStatus == 'vip'
+            && tier == 'gold'
+          ) || (
+            (
+              !exists(/databases/$(database)/documents/securityProfiles/$(userId))
+              || get(/databases/$(database)/documents/securityProfiles/$(userId)).data.vipStatus != 'vip'
+            )
+            && tier == 'starter'
+          )
+        )
+      );
+    }
+
+    function isValidVipPaymentRequest(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'displayName', 'tier', 'billingCycle', 'amountInr', 'upiId', 'paymentReference', 'utrReference', 'paymentMethodLabel', 'status', 'adminNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'userEmail', 'displayName', 'tier', 'billingCycle', 'amountInr', 'upiId', 'paymentReference', 'utrReference', 'paymentMethodLabel', 'status', 'adminNote', 'reviewedBy', 'reviewedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.tier in ['starter', 'silver', 'gold', 'diamond']
+        && data.billingCycle in ['monthly', 'quarterly', 'yearly']
+        && data.amountInr is number
+        && isValidVipPrice(data.tier, data.billingCycle, data.amountInr)
+        && data.upiId == 'tntmilan06@slc'
+        && data.paymentReference is string && data.paymentReference.size() >= 6 && data.paymentReference.size() <= 64
+        && data.paymentReference.matches('^FTPAY-[a-zA-Z0-9_\\-]+$')
+        && data.utrReference is string && data.utrReference.size() >= 4 && data.utrReference.size() <= 64
+        && data.paymentMethodLabel is string && data.paymentMethodLabel.size() >= 2 && data.paymentMethodLabel.size() <= 60
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.adminNote is string && data.adminNote.size() <= 500
+        && data.reviewedBy is string && data.reviewedBy.size() <= 160
+        && (data.reviewedAt == null || data.reviewedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // --- Collection Rules ---
     match /appConfig/{configId} {
       allow get: if configId == 'maintenance';
@@ -277,6 +502,7 @@ service cloud.firestore {
           (
             isVerifiedOwner(userId)
             && (!('accountStatus' in existing()) || existing().accountStatus == 'active')
+            && isNotBanned(userId)
             && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'currency', 'theme', 'monthlyBudgetLimit', 'openingBankBalance', 'openingCashBalance', 'updatedAt'])
           )
           || (
@@ -288,10 +514,11 @@ service cloud.firestore {
         );
       allow delete: if isVerifiedOwner(userId)
         && isValidId(userId)
-        && (!('accountStatus' in existing()) || existing().accountStatus == 'active');
+        && (!('accountStatus' in existing()) || existing().accountStatus == 'active')
+        && isNotBanned(userId);
 
       match /transactions/{transactionId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(transactionId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(transactionId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -317,7 +544,7 @@ service cloud.firestore {
       }
 
       match /savingsGoals/{goalId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(goalId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(goalId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -345,7 +572,7 @@ service cloud.firestore {
           && isActiveAccount(userId);
 
         match /contributions/{contributionId} {
-          allow get: if isOwner(userId) && isValidId(userId) && isValidId(goalId) && isValidId(contributionId);
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(goalId) && isValidId(contributionId) && isActiveAccount(userId);
           allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
           allow create: if isVerifiedOwner(userId)
             && isValidId(userId)
@@ -365,7 +592,7 @@ service cloud.firestore {
       }
 
       match /budgets/{budgetId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(budgetId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(budgetId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -390,7 +617,7 @@ service cloud.firestore {
       }
 
       match /debtRecords/{recordId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(recordId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(recordId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -419,7 +646,7 @@ service cloud.firestore {
       }
 
       match /recordPayments/{paymentId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(paymentId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(paymentId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -439,7 +666,7 @@ service cloud.firestore {
       }
 
       match /bills/{billId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(billId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(billId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -468,7 +695,7 @@ service cloud.firestore {
       }
 
       match /recurringTransactions/{recurringId} {
-        allow get: if isOwner(userId) && isValidId(userId) && isValidId(recurringId);
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(recurringId) && isActiveAccount(userId);
         allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
         allow create: if isVerifiedOwner(userId)
           && isValidId(userId)
@@ -520,10 +747,250 @@ service cloud.firestore {
           && incoming().isRead == true
           && incoming().readAt == request.time
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt'])
-          && isActiveAccount(userId);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt']);
         allow delete: if isMaintenanceAdmin() && isValidId(userId) && isValidId(messageId);
       }
+    }
+
+    match /securityProfiles/{userId} {
+      allow get: if (isOwner(userId) && isValidId(userId)) || isMaintenanceAdmin();
+      allow list: if isMaintenanceAdmin();
+      allow create: if isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidSecurityProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidSecurityProfile(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'userEmail', 'displayName', 'restrictionStatus', 'banType', 'banReason',
+          'banDurationLabel', 'banDurationMs', 'banStartedAt', 'banExpiresAt',
+          'aiRestrictedUntil', 'messagingRestrictedUntil', 'warningCount', 'lastWarningAt',
+          'riskLevel', 'riskScore', 'underInvestigation', 'vipStatus', 'eventCount',
+          'lastEventAt', 'updatedBy', 'updatedAt'
+        ]);
+      allow delete: if isMaintenanceAdmin() && isValidId(userId);
+    }
+
+    match /securityCases/{userId} {
+      allow get: if isMaintenanceAdmin() && isValidId(userId);
+      allow list: if isMaintenanceAdmin();
+      allow create: if isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidSecurityCase(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidSecurityCase(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['internalNotes', 'evidenceSummary', 'lastReviewedBy', 'lastReviewedAt', 'updatedAt']);
+      allow delete: if isMaintenanceAdmin() && isValidId(userId);
+    }
+
+    match /securityEvents/{eventId} {
+      allow get: if isMaintenanceAdmin() && isValidId(eventId);
+      allow list: if isMaintenanceAdmin();
+      allow create: if isSignedIn()
+        && isValidId(eventId)
+        && isValidSecurityEvent(incoming())
+        && incoming().createdAt == request.time
+        && (
+          isMaintenanceAdmin()
+          || (
+            isVerifiedOwner(incoming().userId)
+            && incoming().source == 'client'
+            && incoming().status == 'open'
+          )
+        );
+      allow update: if isMaintenanceAdmin()
+        && isValidId(eventId)
+        && isValidSecurityEvent(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isMaintenanceAdmin() && isValidId(eventId);
+    }
+
+    match /securityAppeals/{appealId} {
+      allow get: if isValidId(appealId) && ((isSignedIn() && existing().userId == request.auth.uid) || isMaintenanceAdmin());
+      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isMaintenanceAdmin();
+      allow create: if isValidId(appealId)
+        && isValidSecurityAppeal(incoming())
+        && isVerifiedOwner(incoming().userId)
+        && isBannedOrDeactivated(incoming().userId)
+        && isNotMessagingRestricted(incoming().userId)
+        && incoming().status == 'pending'
+        && incoming().adminDecisionNote == ''
+        && incoming().reviewedBy == ''
+        && incoming().reviewedAt == null
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isMaintenanceAdmin()
+        && isValidId(appealId)
+        && isValidSecurityAppeal(incoming())
+        && incoming().userId == existing().userId
+        && incoming().userEmail == existing().userEmail
+        && incoming().displayName == existing().displayName
+        && incoming().banType == existing().banType
+        && incoming().banReason == existing().banReason
+        && incoming().appealReason == existing().appealReason
+        && incoming().explanation == existing().explanation
+        && incoming().createdAt == existing().createdAt
+        && incoming().reviewedBy == 'maind.go2000@gmail.com'
+        && incoming().reviewedAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminDecisionNote', 'reviewedBy', 'reviewedAt', 'updatedAt']);
+      allow delete: if isMaintenanceAdmin() && isValidId(appealId);
+    }
+
+    match /securityAuditLogs/{logId} {
+      allow get: if isMaintenanceAdmin() && isValidId(logId);
+      allow list: if isMaintenanceAdmin();
+      allow create: if isMaintenanceAdmin()
+        && isValidId(logId)
+        && isValidSecurityAuditLog(incoming())
+        && incoming().adminEmail == 'maind.go2000@gmail.com'
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /vipSubscriptions/{userId} {
+      allow get: if (isOwner(userId) && isValidId(userId)) || isMaintenanceAdmin();
+      allow list: if isMaintenanceAdmin();
+      allow create: if isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidVipSubscription(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if (
+        isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidVipSubscription(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['tier', 'billingCycle', 'status', 'priceInr', 'paymentReference', 'periodKey', 'periodStartAt', 'periodEndAt', 'autoRenew', 'updatedBy', 'updatedAt'])
+      ) || (
+        isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isActiveAccount(userId)
+        && isValidVipSubscription(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'autoRenew', 'updatedBy', 'updatedAt'])
+        && incoming().status == 'cancelled'
+        && incoming().tier == existing().tier
+        && incoming().billingCycle == existing().billingCycle
+        && incoming().priceInr == existing().priceInr
+        && incoming().paymentReference == existing().paymentReference
+        && incoming().periodKey == existing().periodKey
+        && incoming().periodStartAt == existing().periodStartAt
+        && incoming().periodEndAt == existing().periodEndAt
+        && incoming().autoRenew == false
+      );
+      allow delete: if isMaintenanceAdmin() && isValidId(userId);
+    }
+
+    match /aiUsage/{userId} {
+      allow get: if (isOwner(userId) && isValidId(userId)) || isMaintenanceAdmin();
+      allow list: if isMaintenanceAdmin();
+      allow create: if (
+        isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidAiUsage(incoming(), userId)
+        && incoming().lastResetAt == request.time
+        && incoming().updatedAt == request.time
+      ) || (
+        isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isActiveAccount(userId)
+        && isValidAiUsage(incoming(), userId)
+        && hasAuthorizedAiTier(userId, incoming().tier)
+        && incoming().insightsUsed <= 1
+        && incoming().advisorUsed <= 1
+        && incoming().forecastUsed <= 1
+        && incoming().lastResetAt == request.time
+        && incoming().updatedAt == request.time
+      );
+      allow update: if (
+        isMaintenanceAdmin()
+        && isValidId(userId)
+        && isValidAiUsage(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['tier', 'periodKey', 'periodStartAt', 'periodEndAt', 'insightsUsed', 'insightsLimit', 'advisorUsed', 'advisorLimit', 'forecastUsed', 'lastResetAt', 'updatedAt'])
+      ) || (
+        isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isActiveAccount(userId)
+        && isValidAiUsage(incoming(), userId)
+        && hasAuthorizedAiTier(userId, incoming().tier)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['tier', 'periodKey', 'periodStartAt', 'periodEndAt', 'insightsUsed', 'insightsLimit', 'advisorUsed', 'advisorLimit', 'forecastUsed', 'lastResetAt', 'updatedAt'])
+        && (
+          (
+            incoming().periodKey == existing().periodKey
+            && incoming().lastResetAt == existing().lastResetAt
+            && incoming().insightsUsed >= existing().insightsUsed
+            && incoming().insightsUsed <= existing().insightsUsed + 1
+            && incoming().advisorUsed >= existing().advisorUsed
+            && incoming().advisorUsed <= existing().advisorUsed + 1
+            && incoming().forecastUsed >= existing().forecastUsed
+            && incoming().forecastUsed <= existing().forecastUsed + 1
+          ) || (
+            incoming().periodKey != existing().periodKey
+            && incoming().lastResetAt == request.time
+            && incoming().insightsUsed <= 1
+            && incoming().advisorUsed <= 1
+            && incoming().forecastUsed <= 1
+          )
+        )
+      );
+      allow delete: if isMaintenanceAdmin() && isValidId(userId);
+    }
+
+    match /vipPaymentRequests/{requestId} {
+      allow get: if isValidId(requestId) && ((isSignedIn() && existing().userId == request.auth.uid) || isMaintenanceAdmin());
+      allow list: if (isSignedIn() && resource.data.userId == request.auth.uid) || isMaintenanceAdmin();
+      allow create: if isValidId(requestId)
+        && isValidVipPaymentRequest(incoming())
+        && isVerifiedOwner(incoming().userId)
+        && isActiveAccount(incoming().userId)
+        && incoming().status == 'pending'
+        && incoming().adminNote == ''
+        && incoming().reviewedBy == ''
+        && incoming().reviewedAt == null
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isMaintenanceAdmin()
+        && isValidId(requestId)
+        && isValidVipPaymentRequest(incoming())
+        && existing().status == 'pending'
+        && incoming().status in ['approved', 'rejected']
+        && incoming().userId == existing().userId
+        && incoming().userEmail == existing().userEmail
+        && incoming().displayName == existing().displayName
+        && incoming().tier == existing().tier
+        && incoming().billingCycle == existing().billingCycle
+        && incoming().amountInr == existing().amountInr
+        && incoming().upiId == existing().upiId
+        && incoming().paymentReference == existing().paymentReference
+        && incoming().utrReference == existing().utrReference
+        && incoming().paymentMethodLabel == existing().paymentMethodLabel
+        && incoming().createdAt == existing().createdAt
+        && incoming().reviewedBy == 'maind.go2000@gmail.com'
+        && incoming().reviewedAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'reviewedBy', 'reviewedAt', 'updatedAt']);
+      allow delete: if isMaintenanceAdmin() && isValidId(requestId);
     }
   }
 }

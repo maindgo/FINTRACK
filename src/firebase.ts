@@ -60,6 +60,28 @@ export function handleFirestoreError(
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
+  if (
+    typeof window !== 'undefined' &&
+    auth.currentUser?.emailVerified &&
+    path &&
+    !path.startsWith('securityEvents') &&
+    errInfo.error.toLowerCase().includes('permission')
+  ) {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('fintrack-firestore-denied', {
+          detail: {
+            uid: auth.currentUser.uid,
+            email: auth.currentUser.email || '',
+            operationType,
+            path,
+          },
+        })
+      );
+    } catch {
+      // ignore dispatch failures
+    }
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 

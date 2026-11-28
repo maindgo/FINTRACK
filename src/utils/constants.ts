@@ -129,6 +129,7 @@ export const FIELD_LIMITS = {
 
 export const ADMIN_EMAIL = 'maind.go2000@gmail.com';
 export const SUPPORT_EMAIL = 'support.maindgo@gmail.com';
+export const VIP_UPI_ID = 'tntmilan06@slc';
 
 export const MAINTENANCE_UPDATE_ITEMS = [
   'AI Accountant soon',

@@ -4,6 +4,12 @@ import {
   getClientKeyFromHeaders,
   type HandlerResult,
 } from './aiHandlers';
+import {
+  trackRateLimitViolation,
+  verifyCallerSecurityAccess,
+  type SecurityGuardOptions,
+  type SecurityGuardResult,
+} from './securityGuard';
 
 export interface VercelLikeRequest extends IncomingMessage {
   body?: unknown;
@@ -31,7 +37,7 @@ export function sendJson(
   res.end(JSON.stringify(payload));
 }
 
-async function readJsonBody(req: VercelLikeRequest, maxBytes: number): Promise<unknown> {
+export async function readJsonBody(req: VercelLikeRequest, maxBytes: number): Promise<unknown> {
   if (req.body !== undefined) {
     if (typeof req.body === 'string') {
       const trimmed = req.body.trim();
@@ -81,7 +87,11 @@ export async function runVercelPostHandler(
   req: VercelLikeRequest,
   res: VercelLikeResponse,
   maxBytes: number,
-  handler: (body: unknown) => Promise<HandlerResult>
+  handler: (
+    body: unknown,
+    guard?: Extract<SecurityGuardResult, { allowed: true }>
+  ) => Promise<HandlerResult>,
+  securityOptions?: SecurityGuardOptions
 ): Promise<void> {
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
@@ -100,14 +110,38 @@ export async function runVercelPostHandler(
     return;
   }
 
-  const clientKey = getClientKeyFromHeaders(req.headers, req.socket?.remoteAddress);
+  let verifiedGuard: Extract<SecurityGuardResult, { allowed: true }> | undefined;
+  if (securityOptions) {
+    const guard = await verifyCallerSecurityAccess(
+      req.headers,
+      req.socket?.remoteAddress,
+      securityOptions
+    );
+    if (guard.allowed === false) {
+      sendJson(res, guard.status, guard.body);
+      return;
+    }
+    verifiedGuard = guard;
+  }
+
+  const clientKey = verifiedGuard
+    ? `uid:${verifiedGuard.token.uid}`
+    : getClientKeyFromHeaders(req.headers, req.socket?.remoteAddress);
   const rate = checkRateLimit(clientKey);
   if (!rate.allowed) {
+    trackRateLimitViolation({
+      clientKey,
+      userId: verifiedGuard?.token.uid,
+      userEmail: verifiedGuard?.token.email,
+      endpoint: securityOptions?.endpointLabel || req.url || '/api',
+      retryAfterSeconds: rate.retryAfterSeconds,
+      headers: req.headers,
+    });
     sendJson(
       res,
       429,
       {
-        error: `Too many AI requests. Please wait ${rate.retryAfterSeconds} seconds before trying again.`,
+        error: `Too many requests. Please wait ${rate.retryAfterSeconds} seconds before trying again.`,
         code: 'RATE_LIMITED',
         retryAfterSeconds: rate.retryAfterSeconds,
       },
@@ -130,11 +164,55 @@ export async function runVercelPostHandler(
   }
 
   try {
-    const result = await handler(body);
+    const result = await handler(body, verifiedGuard);
     sendJson(res, result.status, result.body);
   } catch {
     sendJson(res, 500, {
-      error: 'Unexpected AI service error. Please try again shortly.',
+      error: 'Unexpected service error. Please try again shortly.',
+      code: 'INTERNAL_ERROR',
+    });
+  }
+}
+
+export async function runVercelGetHandler(
+  req: VercelLikeRequest,
+  res: VercelLikeResponse,
+  handler: (guard: Extract<SecurityGuardResult, { allowed: true }>) => Promise<HandlerResult> | HandlerResult,
+  securityOptions: SecurityGuardOptions
+): Promise<void> {
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    res.setHeader('Allow', 'GET, OPTIONS');
+    res.end();
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    sendJson(
+      res,
+      405,
+      { error: 'Method not allowed. Use GET.', code: 'METHOD_NOT_ALLOWED' },
+      { Allow: 'GET, OPTIONS' }
+    );
+    return;
+  }
+
+  const guard = await verifyCallerSecurityAccess(
+    req.headers,
+    req.socket?.remoteAddress,
+    securityOptions
+  );
+  if (guard.allowed === false) {
+    sendJson(res, guard.status, guard.body);
+    return;
+  }
+
+  try {
+    const result = await handler(guard);
+    sendJson(res, result.status, result.body);
+  } catch {
+    sendJson(res, 500, {
+      error: 'Unexpected service error. Please try again shortly.',
       code: 'INTERNAL_ERROR',
     });
   }

@@ -362,6 +362,46 @@ export interface GeminiAIInsightsResult {
       status_note: string;
     }[];
   };
+  health_score?: {
+    score: number;
+    grade: string;
+    summary: string;
+    savings_rate_score: number;
+    budget_discipline_score: number;
+    expense_stability_score: number;
+    debt_commitment_score: number;
+    recommendations: string[];
+  } | null;
+  diamond_forecast?: {
+    forecast_horizon_label: string;
+    executive_summary: string;
+    monthly_projections: {
+      month_label: string;
+      projected_income_inr: number;
+      projected_expenses_inr: number;
+      projected_savings_inr: number;
+      confidence_note: string;
+    }[];
+    future_expense_predictions: {
+      category: string;
+      current_monthly_inr: number;
+      predicted_next_month_inr: number;
+      expected_change_pct: number;
+      driver_note: string;
+    }[];
+    personalized_financial_plan: {
+      phase: string;
+      action_title: string;
+      target_amount_inr: number;
+      rationale: string;
+    }[];
+    advanced_health_analysis: {
+      emergency_runway_months: number;
+      resilience_rating: string;
+      risk_factors: string[];
+      optimization_levers: string[];
+    };
+  } | null;
 }
 
 export interface AIChatMessage {
@@ -395,3 +435,218 @@ export interface AdminMessage {
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
+
+// --- FinTrack Security Center & Suspicious Activity Detection ---
+export type SecurityRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export type SecurityEventCategory =
+  | 'account_security'
+  | 'vip_payment_security'
+  | 'api_backend_security'
+  | 'data_security'
+  | 'messaging_security';
+
+export type SecurityEventType =
+  | 'repeated_failed_login'
+  | 'suspicious_account_creation'
+  | 'unauthorized_account_access'
+  | 'deactivation_bypass_attempt'
+  | 'unauthorized_vip_access'
+  | 'subscription_bypass_attempt'
+  | 'payment_verification_inconsistency'
+  | 'membership_manipulation_attempt'
+  | 'excessive_ai_requests'
+  | 'rate_limit_bypass_attempt'
+  | 'unauthorized_api_request'
+  | 'unauthorized_firebase_access'
+  | 'suspicious_bot_activity'
+  | 'cross_user_record_access'
+  | 'unauthorized_tx_modification'
+  | 'suspicious_bulk_mutation'
+  | 'unauthorized_admin_access'
+  | 'spam_messages'
+  | 'malicious_links'
+  | 'abusive_or_threatening_message';
+
+export type RestrictionStatus =
+  | 'active'
+  | 'under_investigation'
+  | 'temp_banned'
+  | 'perm_banned';
+
+export type BanType = 'none' | 'temporary' | 'permanent';
+
+export type VipStatus = 'none' | 'vip';
+export type VipTier = 'starter' | 'silver' | 'gold' | 'diamond';
+export type BillingCycle = 'monthly' | 'quarterly' | 'yearly';
+export type SubscriptionStatus = 'active' | 'expired' | 'cancelled';
+
+export interface VipSubscription {
+  userId: string;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  status: SubscriptionStatus;
+  priceInr: number;
+  paymentReference: string;
+  periodKey: string;
+  periodStartAt?: Timestamp | null;
+  periodEndAt?: Timestamp | null;
+  periodStartIso?: string;
+  periodEndIso?: string;
+  autoRenew: boolean;
+  updatedBy: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export type VipPaymentRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface VipPaymentRequest {
+  id: string;
+  userId: string;
+  userEmail: string;
+  displayName: string;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  amountInr: number;
+  upiId: string;
+  paymentReference: string;
+  utrReference: string;
+  paymentMethodLabel: string;
+  status: VipPaymentRequestStatus;
+  adminNote: string;
+  reviewedBy: string;
+  reviewedAt?: Timestamp | null;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface AiUsageRecord {
+  userId: string;
+  tier: VipTier;
+  periodKey: string;
+  periodStartAt?: Timestamp | null;
+  periodEndAt?: Timestamp | null;
+  periodStartIso?: string;
+  periodEndIso?: string;
+  insightsUsed: number;
+  insightsLimit: number;
+  advisorUsed: number;
+  advisorLimit: number;
+  forecastUsed: number;
+  lastResetAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface AiUsageSummary {
+  tier: VipTier;
+  periodKey: string;
+  periodStartIso: string;
+  periodEndIso: string;
+  insightsUsed: number;
+  insightsLimit: number;
+  insightsRemaining: number;
+  advisorUsed: number;
+  advisorLimit: number;
+  advisorRemaining: number;
+  forecastUsed: number;
+  lastResetIso: string;
+}
+
+export type AppealStatus = 'pending' | 'under_review' | 'approved' | 'rejected';
+
+export type SecurityAdminActionType =
+  | 'send_warning'
+  | 'restrict_ai'
+  | 'clear_ai_restriction'
+  | 'restrict_messaging'
+  | 'clear_messaging_restriction'
+  | 'temp_ban'
+  | 'perm_ban'
+  | 'reactivate_account'
+  | 'mark_under_investigation'
+  | 'resolve_investigation'
+  | 'update_internal_notes'
+  | 'review_appeal'
+  | 'update_vip_status';
+
+export interface SecurityProfile {
+  userId: string;
+  userEmail: string;
+  displayName: string;
+  restrictionStatus: RestrictionStatus;
+  banType: BanType;
+  banReason: string;
+  banDurationLabel: string;
+  banDurationMs: number;
+  banStartedAt?: Timestamp | null;
+  banExpiresAt?: Timestamp | null;
+  aiRestrictedUntil?: Timestamp | null;
+  messagingRestrictedUntil?: Timestamp | null;
+  warningCount: number;
+  lastWarningAt?: Timestamp | null;
+  riskLevel: SecurityRiskLevel;
+  riskScore: number;
+  underInvestigation: boolean;
+  vipStatus: VipStatus;
+  eventCount: number;
+  lastEventAt?: Timestamp | null;
+  updatedBy: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface SecurityCase {
+  userId: string;
+  internalNotes: string;
+  evidenceSummary: string;
+  lastReviewedBy: string;
+  lastReviewedAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface SecurityEventRecord {
+  id: string;
+  userId: string;
+  userEmail: string;
+  category: SecurityEventCategory;
+  eventType: SecurityEventType;
+  riskLevel: SecurityRiskLevel;
+  riskScore: number;
+  summary: string;
+  evidence: string;
+  source: 'client' | 'backend' | 'admin';
+  status: 'open' | 'reviewed' | 'dismissed';
+  createdAt?: Timestamp | null;
+  createdAtIso?: string;
+}
+
+export interface SecurityAppeal {
+  id: string;
+  userId: string;
+  userEmail: string;
+  displayName: string;
+  banType: BanType;
+  banReason: string;
+  appealReason: string;
+  explanation: string;
+  status: AppealStatus;
+  adminDecisionNote: string;
+  reviewedBy: string;
+  reviewedAt?: Timestamp | null;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface SecurityAuditLog {
+  id: string;
+  targetUserId: string;
+  targetUserEmail: string;
+  adminEmail: string;
+  actionType: SecurityAdminActionType;
+  reason: string;
+  details: string;
+  durationLabel: string;
+  createdAt?: Timestamp | null;
+}
+

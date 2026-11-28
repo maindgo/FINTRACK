@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
+  Crown,
   Eye,
   Loader2,
   Megaphone,
@@ -14,20 +16,34 @@ import {
   UserMinus,
   Users,
   UserX,
+  XCircle,
 } from 'lucide-react';
 import { AdminPopupMessageModal } from '../components/AdminPopupMessageModal';
+import { AdminSecurityCenter } from '../components/AdminSecurityCenter';
 import { useFinance } from '../context/FinanceContext';
 import {
+  reviewVipPaymentRequest,
   sendAdminPopupMessageToUsers,
   setUserAccountStatus,
   subscribeAllUsersForAdmin,
 } from '../services/firestoreService';
-import { AccountStatus, AdminMessage, UserProfile } from '../types/finance';
-import { ADMIN_EMAIL, DEFAULT_ADMIN_MESSAGE_HEADING } from '../utils/constants';
+import {
+  AccountStatus,
+  AdminMessage,
+  UserProfile,
+  VipPaymentRequest,
+  VipPaymentRequestStatus,
+} from '../types/finance';
+import { ADMIN_EMAIL, DEFAULT_ADMIN_MESSAGE_HEADING, VIP_UPI_ID } from '../utils/constants';
 import { formatCurrency } from '../utils/formatters';
+import { BILLING_CYCLE_LABELS, VIP_TIER_CONFIGS } from '../utils/vipTiers';
 
-export function AdminPage() {
-  const { isAdmin } = useFinance();
+interface AdminPageProps {
+  initialSection?: 'users' | 'security' | 'vip-approvals';
+}
+
+export function AdminPage({ initialSection }: AdminPageProps) {
+  const { isAdmin, adminVipPaymentRequests, pendingVipRequestCount } = useFinance();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -39,6 +55,15 @@ export function AdminPage() {
   } | null>(null);
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState('');
+  const [activeSection, setActiveSection] = useState<'users' | 'security' | 'vip-approvals'>(
+    initialSection || 'users'
+  );
+
+  // VIP Payment Request Review state
+  const [vipReqFilter, setVipReqFilter] = useState<'all' | VipPaymentRequestStatus>('pending');
+  const [vipReqSearch, setVipReqSearch] = useState('');
+  const [vipNotesMap, setVipNotesMap] = useState<Record<string, string>>({});
+  const [reviewingReqId, setReviewingReqId] = useState<string | null>(null);
 
   // Administrative Pop-Up Message Composer
   const [messageTarget, setMessageTarget] = useState<string>('all');
@@ -46,6 +71,12 @@ export function AdminPage() {
   const [messageBody, setMessageBody] = useState('');
   const [sendingPopup, setSendingPopup] = useState(false);
   const [previewPopupOpen, setPreviewPopupOpen] = useState(false);
+
+  useEffect(() => {
+    if (initialSection) {
+      setActiveSection(initialSection);
+    }
+  }, [initialSection]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -88,6 +119,31 @@ export function AdminPage() {
       );
     });
   }, [users, search, statusFilter]);
+
+  const vipRequestStats = useMemo(() => {
+    const pending = adminVipPaymentRequests.filter((r) => r.status === 'pending').length;
+    const approved = adminVipPaymentRequests.filter((r) => r.status === 'approved').length;
+    const rejected = adminVipPaymentRequests.filter((r) => r.status === 'rejected').length;
+    const approvedAmount = adminVipPaymentRequests
+      .filter((r) => r.status === 'approved')
+      .reduce((sum, r) => sum + (Number(r.amountInr) || 0), 0);
+    return { pending, approved, rejected, approvedAmount };
+  }, [adminVipPaymentRequests]);
+
+  const filteredVipRequests = useMemo(() => {
+    const q = vipReqSearch.trim().toLowerCase();
+    return adminVipPaymentRequests.filter((req) => {
+      if (vipReqFilter !== 'all' && req.status !== vipReqFilter) return false;
+      if (!q) return true;
+      return (
+        (req.displayName || '').toLowerCase().includes(q) ||
+        (req.userEmail || '').toLowerCase().includes(q) ||
+        (req.userId || '').toLowerCase().includes(q) ||
+        (req.utrReference || '').toLowerCase().includes(q) ||
+        (req.paymentReference || '').toLowerCase().includes(q)
+      );
+    });
+  }, [adminVipPaymentRequests, vipReqFilter, vipReqSearch]);
 
   if (!isAdmin) {
     return (
@@ -139,19 +195,24 @@ export function AdminPage() {
       return;
     }
 
+    const nonAdminUsers = users.filter(
+      (u) => (u.email || '').toLowerCase() !== ADMIN_EMAIL
+    );
     const targetUids =
       messageTarget === 'all'
-        ? users
-            .filter(
-              (u) =>
-                u.accountStatus !== 'deactivated' &&
-                (u.email || '').toLowerCase() !== ADMIN_EMAIL
-            )
+        ? nonAdminUsers
+            .filter((u) => u.accountStatus !== 'deactivated')
+            .map((u) => u.uid)
+        : messageTarget === 'all_including_deactivated'
+        ? nonAdminUsers.map((u) => u.uid)
+        : messageTarget === 'deactivated_only'
+        ? nonAdminUsers
+            .filter((u) => u.accountStatus === 'deactivated')
             .map((u) => u.uid)
         : [messageTarget];
 
     if (targetUids.length === 0) {
-      setError('No eligible active user accounts found for this pop-up message.');
+      setError('No eligible user accounts found for this pop-up message.');
       return;
     }
 
@@ -168,6 +229,10 @@ export function AdminPage() {
       setActionMsg(
         messageTarget === 'all'
           ? `Pop-up message sent to ${count} active FinTrack user account${count === 1 ? '' : 's'}.`
+          : messageTarget === 'all_including_deactivated'
+          ? `Pop-up message sent to ${count} FinTrack user account${count === 1 ? '' : 's'} (active & deactivated).`
+          : messageTarget === 'deactivated_only'
+          ? `Pop-up message sent to ${count} deactivated FinTrack account${count === 1 ? '' : 's'}.`
           : `Pop-up message sent to ${targetUserObj?.email || 'selected user'}.`
       );
       setMessageBody('');
@@ -193,6 +258,38 @@ export function AdminPage() {
       ]
     : [];
 
+  const handleReviewVipPayment = async (
+    request: VipPaymentRequest,
+    decision: 'approved' | 'rejected'
+  ) => {
+    const note = (vipNotesMap[request.id] || '').trim();
+    setError('');
+    setActionMsg('');
+    if (decision === 'rejected' && note.length < 3) {
+      setError('Please enter a brief rejection reason in the note box before rejecting.');
+      return;
+    }
+    setReviewingReqId(request.id);
+    try {
+      await reviewVipPaymentRequest({ request, decision, adminNote: note });
+      const tierSpec = VIP_TIER_CONFIGS[request.tier];
+      setActionMsg(
+        decision === 'approved'
+          ? `Confirmed UPI payment (UTR: ${request.utrReference}) and activated ${tierSpec.classLabel} ${tierSpec.name} for ${request.userEmail}.`
+          : `Rejected VIP payment request (UTR: ${request.utrReference}) for ${request.userEmail}. VIP remains locked.`
+      );
+      setVipNotesMap((prev) => {
+        const next = { ...prev };
+        delete next[request.id];
+        return next;
+      });
+    } catch (err) {
+      setError((err as Error)?.message || 'Unable to process VIP payment decision.');
+    } finally {
+      setReviewingReqId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -201,15 +298,340 @@ export function AdminPage() {
           <div className="flex items-center gap-2">
             <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <h2 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Admin Panel · Signed-Up Users
+              {activeSection === 'security'
+                ? 'Admin Panel · Security Center'
+                : activeSection === 'vip-approvals'
+                ? 'Admin Panel · VIP UPI Approvals'
+                : 'Admin Panel · Signed-Up Users'}
             </h2>
           </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            View all registered FinTrack accounts and deactivate or reactivate user access.
+            {activeSection === 'security'
+              ? 'Monitor suspicious activity, enforce temporary or permanent bans, review appeals, and audit admin actions.'
+              : activeSection === 'vip-approvals'
+              ? `Verify user UPI payments made to ${VIP_UPI_ID} and confirm or reject VIP activations.`
+              : 'View all registered FinTrack accounts and deactivate or reactivate user access.'}
           </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-fit shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveSection('users')}
+            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+              activeSection === 'users'
+                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Users &amp; Messaging
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection('vip-approvals')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+              activeSection === 'vip-approvals'
+                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span>VIP Approvals</span>
+            {pendingVipRequestCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] font-bold font-mono leading-none">
+                {pendingVipRequestCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSection('security')}
+            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap shrink-0 transition-colors ${
+              activeSection === 'security'
+                ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Security Center
+          </button>
         </div>
       </div>
 
+      {pendingVipRequestCount > 0 && activeSection !== 'vip-approvals' && (
+        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+            <Crown className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              <strong>{pendingVipRequestCount}</strong> pending VIP UPI payment verification request
+              {pendingVipRequestCount === 1 ? '' : 's'} sent to{' '}
+              <span className="font-mono font-semibold">{VIP_UPI_ID}</span> awaiting your confirmation or rejection.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSection('vip-approvals')}
+            className="px-3.5 py-1.5 rounded-lg bg-amber-500 text-slate-950 text-xs font-semibold hover:bg-amber-400 whitespace-nowrap self-start sm:self-auto"
+          >
+            Review VIP Payments ({pendingVipRequestCount})
+          </button>
+        </div>
+      )}
+
+      {activeSection === 'security' ? (
+        <AdminSecurityCenter users={users} />
+      ) : activeSection === 'vip-approvals' ? (
+        <div className="space-y-5">
+          {/* VIP Approvals Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Pending Verification</div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-amber-600 dark:text-amber-400 mt-1">
+                  {vipRequestStats.pending}
+                </div>
+              </div>
+              <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Confirmed Requests</div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 mt-1">
+                  {vipRequestStats.approved}
+                </div>
+              </div>
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Rejected Requests</div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-red-600 dark:text-red-400 mt-1">
+                  {vipRequestStats.rejected}
+                </div>
+              </div>
+              <XCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
+            </div>
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Confirmed UPI Total</div>
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
+                  ₹{vipRequestStats.approvedAmount}
+                </div>
+              </div>
+              <Crown className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+          </div>
+
+          {actionMsg && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{actionMsg}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Filter & Search Bar */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={vipReqSearch}
+                onChange={(e) => setVipReqSearch(e.target.value)}
+                placeholder="Search by email, UTR, or payment reference..."
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 w-fit">
+              {(
+                [
+                  { id: 'pending', label: `Pending (${vipRequestStats.pending})` },
+                  { id: 'approved', label: 'Confirmed' },
+                  { id: 'rejected', label: 'Rejected' },
+                  { id: 'all', label: 'All' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setVipReqFilter(tab.id)}
+                  className={`px-3 py-1 rounded-md text-xs font-medium whitespace-nowrap ${
+                    vipReqFilter === tab.id
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Requests List */}
+          {filteredVipRequests.length === 0 ? (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center space-y-2">
+              <Crown className="w-7 h-7 text-slate-400 mx-auto" />
+              <div className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                No {vipReqFilter === 'all' ? '' : vipReqFilter} VIP payment requests
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                When users pay to <span className="font-mono">{VIP_UPI_ID}</span> and submit their UTR reference, requests appear here for your confirmation or rejection.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredVipRequests.map((req) => {
+                const tierSpec = VIP_TIER_CONFIGS[req.tier];
+                const cycleSpec = BILLING_CYCLE_LABELS[req.billingCycle];
+                const isPending = req.status === 'pending';
+                const isBusy = reviewingReqId === req.id;
+                const submittedDate = req.createdAt?.seconds
+                  ? new Date(req.createdAt.seconds * 1000).toLocaleString('en-IN')
+                  : 'Just now';
+
+                return (
+                  <div
+                    key={req.id}
+                    className={`bg-white dark:bg-slate-900 rounded-xl p-5 border space-y-4 ${
+                      isPending
+                        ? 'border-amber-300 dark:border-amber-800'
+                        : 'border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">
+                            {req.displayName}
+                          </span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            ({req.userEmail})
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-semibold ${tierSpec.badgeContainerClass}`}
+                          >
+                            <Crown className="w-3 h-3" />
+                            {tierSpec.classLabel} · {tierSpec.name}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                          <span>
+                            Cycle: <strong>{cycleSpec.label}</strong>
+                          </span>
+                          <span>
+                            Payable:{' '}
+                            <strong className="font-mono text-emerald-700 dark:text-emerald-400">
+                              ₹{req.amountInr}
+                            </strong>
+                          </span>
+                          <span>
+                            UPI ID: <strong className="font-mono">{req.upiId}</strong>
+                          </span>
+                          <span>
+                            Submitted: <span className="font-mono">{submittedDate}</span>
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs pt-0.5">
+                          <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 font-mono text-slate-900 dark:text-white">
+                            UTR / UPI Ref: <strong>{req.utrReference}</strong>
+                          </span>
+                          <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                            Req Ref: {req.paymentReference} · UID: {req.userId}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0">
+                        {req.status === 'pending' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                            <Clock className="w-3.5 h-3.5" />
+                            Pending Verification
+                          </span>
+                        ) : req.status === 'approved' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Confirmed
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
+                            <XCircle className="w-3.5 h-3.5" />
+                            Rejected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {isPending ? (
+                      <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center gap-3">
+                        <input
+                          type="text"
+                          maxLength={500}
+                          disabled={isBusy}
+                          value={vipNotesMap[req.id] || ''}
+                          onChange={(e) =>
+                            setVipNotesMap((prev) => ({ ...prev, [req.id]: e.target.value }))
+                          }
+                          placeholder="Optional confirmation note, or required reason if rejecting..."
+                          className="flex-1 px-3 py-2 text-xs rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
+                        />
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleReviewVipPayment(req, 'rejected')}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-semibold hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-50"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>Reject</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleReviewVipPayment(req, 'approved')}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            {isBusy ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            )}
+                            <span>{isBusy ? 'Processing...' : 'Confirm & Activate VIP'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          Reviewed by <span className="font-mono">{req.reviewedBy || ADMIN_EMAIL}</span>
+                          {req.reviewedAt?.seconds
+                            ? ` on ${new Date(req.reviewedAt.seconds * 1000).toLocaleString('en-IN')}`
+                            : ''}
+                        </span>
+                        {req.adminNote && (
+                          <span className="text-slate-700 dark:text-slate-300">
+                            Note: {req.adminNote}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between">
@@ -273,7 +695,7 @@ export function AdminPage() {
                 Send Administrative Pop-Up Message
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Displays a pop-up alert inside the selected user&apos;s FinTrack account (or all active accounts) until acknowledged.
+                Displays a pop-up alert inside the selected user&apos;s FinTrack account (including deactivated accounts) until acknowledged.
               </p>
             </div>
           </div>
@@ -299,6 +721,12 @@ export function AdminPage() {
             >
               <option value="all">
                 All Active FinTrack Users ({users.filter((u) => u.accountStatus !== 'deactivated' && (u.email || '').toLowerCase() !== ADMIN_EMAIL).length})
+              </option>
+              <option value="all_including_deactivated">
+                All Users — Active &amp; Deactivated ({users.filter((u) => (u.email || '').toLowerCase() !== ADMIN_EMAIL).length})
+              </option>
+              <option value="deactivated_only">
+                All Deactivated Accounts ({users.filter((u) => u.accountStatus === 'deactivated' && (u.email || '').toLowerCase() !== ADMIN_EMAIL).length})
               </option>
               {users.map((u) => (
                 <option key={u.uid} value={u.uid}>
@@ -611,6 +1039,8 @@ export function AdminPage() {
         onAcknowledge={async () => setPreviewPopupOpen(false)}
         onClosePreview={() => setPreviewPopupOpen(false)}
       />
+        </>
+      )}
     </div>
   );
 }

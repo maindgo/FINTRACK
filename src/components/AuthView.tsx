@@ -31,6 +31,11 @@ import {
   loadSecurityConfig,
   SecurityLockConfig,
 } from '../services/securityService';
+import { reportAuthSecurityEvent } from '../services/aiInsightsService';
+import {
+  clearLocalFailedLoginCount,
+  trackLocalFailedLoginCount,
+} from '../services/securityDetectionService';
 
 type AuthMode = 'login' | 'register' | 'forgot';
 type SignupAccountType = 'personal' | 'business' | 'other';
@@ -88,6 +93,7 @@ export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
     try {
       if (mode === 'login') {
         await signInWithEmailAndPassword(auth, email.trim(), password);
+        clearLocalFailedLoginCount(email.trim());
       } else if (mode === 'register') {
         const cleanName = fullName.trim();
         const cleanBusiness = businessName.trim();
@@ -112,6 +118,11 @@ export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
         await updateProfile(cred.user, { displayName: combinedDisplayName });
         await sendEmailVerification(cred.user);
+        void reportAuthSecurityEvent({
+          eventType: 'signup_created',
+          email: email.trim(),
+          userId: cred.user.uid,
+        });
         setInfoMsg('Account created! A verification email has been sent to your inbox.');
       } else if (mode === 'forgot') {
         await sendPasswordResetEmail(auth, email.trim());
@@ -125,10 +136,25 @@ export function AuthView({ onBackToMaintenance }: AuthViewProps = {}) {
           'Email/Password sign-in is not yet enabled in Firebase Console for this project. Use Google Sign-In below or enable Email/Password in Firebase Auth.'
         );
       } else if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-        setErrorMsg('Invalid email or password. Please verify your credentials.');
+        const attempts = trackLocalFailedLoginCount(email.trim());
+        void reportAuthSecurityEvent({
+          eventType: 'failed_login',
+          email: email.trim(),
+          errorCode: code,
+        });
+        setErrorMsg(
+          attempts >= 3
+            ? 'Multiple failed sign-in attempts detected. Please check your credentials carefully or reset your password.'
+            : 'Invalid email or password. Please verify your credentials.'
+        );
       } else if (code === 'auth/email-already-in-use') {
         setErrorMsg('An account with this email already exists. Try signing in instead.');
       } else if (code === 'auth/too-many-requests') {
+        void reportAuthSecurityEvent({
+          eventType: 'failed_login',
+          email: email.trim(),
+          errorCode: code,
+        });
         setErrorMsg('Too many attempts. Please wait a moment and try again.');
       } else {
         setErrorMsg((err as Error)?.message || 'Authentication failed.');

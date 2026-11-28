@@ -1,15 +1,22 @@
+import { auth } from '../firebase';
 import {
   AIChatMessage,
+  AiUsageSummary,
   BillRecord,
   BudgetRecord,
+  BillingCycle,
   GeminiAIInsightsResult,
   RecurringTransaction,
   SanitizedFinancialSnapshot,
   SavingsGoal,
+  SecurityEventRecord,
+  SubscriptionStatus,
   TransactionRecord,
+  VipTier,
   VoiceParsedTransaction,
 } from '../types/finance';
 import { buildMonthlySeries } from '../utils/analytics';
+import { VIP_UPI_ID } from '../utils/constants';
 import {
   formatMonthLabel,
   getCurrentMonthStr,
@@ -21,13 +28,29 @@ export class AIInsightsApiError extends Error {
   status: number;
   code: string;
   retryAfterSeconds?: number;
+  currentTier?: VipTier;
+  requiredTier?: VipTier;
+  usage?: AiUsageSummary;
 
-  constructor(message: string, status: number, code: string, retryAfterSeconds?: number) {
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    retryAfterSeconds?: number,
+    extra?: {
+      currentTier?: VipTier;
+      requiredTier?: VipTier;
+      usage?: AiUsageSummary;
+    }
+  ) {
     super(message);
     this.name = 'AIInsightsApiError';
     this.status = status;
     this.code = code;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.currentTier = extra?.currentTier;
+    this.requiredTier = extra?.requiredTier;
+    this.usage = extra?.usage;
   }
 }
 
@@ -238,23 +261,55 @@ async function parseErrorResponse(res: Response): Promise<AIInsightsApiError> {
   let message = `Request failed with status ${res.status}.`;
   let code = 'AI_REQUEST_FAILED';
   let retryAfterSeconds: number | undefined;
+  let currentTier: VipTier | undefined;
+  let requiredTier: VipTier | undefined;
+  let usage: AiUsageSummary | undefined;
 
   try {
     const data = (await res.json()) as {
       error?: string;
       code?: string;
       retryAfterSeconds?: number;
+      currentTier?: VipTier;
+      requiredTier?: VipTier;
+      usage?: AiUsageSummary;
     };
     if (data.error) message = data.error;
     if (data.code) code = data.code;
     if (typeof data.retryAfterSeconds === 'number') {
       retryAfterSeconds = data.retryAfterSeconds;
     }
+    if (data.currentTier) currentTier = data.currentTier;
+    if (data.requiredTier) requiredTier = data.requiredTier;
+    if (data.usage) usage = data.usage;
   } catch {
     // Keep fallback error message
   }
 
-  return new AIInsightsApiError(message, res.status, code, retryAfterSeconds);
+  return new AIInsightsApiError(message, res.status, code, retryAfterSeconds, {
+    currentTier,
+    requiredTier,
+    usage,
+  });
+}
+
+async function getAuthHeaders(includeJsonContentType = true): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const user = auth.currentUser;
+  if (user) {
+    try {
+      const token = await user.getIdToken();
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // Backend will cleanly reject missing/expired token with 401
+    }
+  }
+  return headers;
 }
 
 export async function checkAIHealth(): Promise<{ ok: boolean; geminiConfigured: boolean }> {
@@ -267,12 +322,17 @@ export async function checkAIHealth(): Promise<{ ok: boolean; geminiConfigured: 
 
 export async function fetchAIInsights(
   snapshot: SanitizedFinancialSnapshot
-): Promise<{ model: string; generatedAt: string; insights: GeminiAIInsightsResult }> {
+): Promise<{
+  model: string;
+  generatedAt: string;
+  tier?: VipTier;
+  usage?: AiUsageSummary;
+  insights: GeminiAIInsightsResult;
+}> {
+  const headers = await getAuthHeaders(true);
   const res = await fetch('/api/ai/insights', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({ snapshot }),
   });
 
@@ -283,6 +343,8 @@ export async function fetchAIInsights(
   return (await res.json()) as {
     model: string;
     generatedAt: string;
+    tier?: VipTier;
+    usage?: AiUsageSummary;
     insights: GeminiAIInsightsResult;
   };
 }
@@ -291,12 +353,17 @@ export async function sendAIChatMessage(params: {
   question: string;
   history: Pick<AIChatMessage, 'role' | 'content'>[];
   snapshot: SanitizedFinancialSnapshot;
-}): Promise<{ model: string; answer: string; answeredAt: string }> {
+}): Promise<{
+  model: string;
+  answer: string;
+  answeredAt: string;
+  tier?: VipTier;
+  usage?: AiUsageSummary;
+}> {
+  const headers = await getAuthHeaders(true);
   const res = await fetch('/api/ai/chat', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(params),
   });
 
@@ -308,6 +375,37 @@ export async function sendAIChatMessage(params: {
     model: string;
     answer: string;
     answeredAt: string;
+    tier?: VipTier;
+    usage?: AiUsageSummary;
+  };
+}
+
+export async function fetchDiamondForecast(
+  snapshot: SanitizedFinancialSnapshot
+): Promise<{
+  model: string;
+  generatedAt: string;
+  tier?: VipTier;
+  usage?: AiUsageSummary;
+  diamond_forecast: NonNullable<GeminiAIInsightsResult['diamond_forecast']>;
+}> {
+  const headers = await getAuthHeaders(true);
+  const res = await fetch('/api/ai/forecast', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ snapshot }),
+  });
+
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+
+  return (await res.json()) as {
+    model: string;
+    generatedAt: string;
+    tier?: VipTier;
+    usage?: AiUsageSummary;
+    diamond_forecast: NonNullable<GeminiAIInsightsResult['diamond_forecast']>;
   };
 }
 
@@ -320,11 +418,10 @@ export async function parseVoiceTransaction(params: {
   localDate: string;
   localTime: string;
 }): Promise<{ model: string; transaction: VoiceParsedTransaction }> {
+  const headers = await getAuthHeaders(true);
   const res = await fetch('/api/ai/voice-transaction', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(params),
   });
 
@@ -336,4 +433,276 @@ export async function parseVoiceTransaction(params: {
     model: string;
     transaction: VoiceParsedTransaction;
   };
+}
+
+export function parseVoicePhraseLocally(
+  transcript: string,
+  localDate: string,
+  localTime: string
+): VoiceParsedTransaction {
+  const cleaned = transcript.trim();
+  const lower = cleaned.toLowerCase();
+  const kMatch = lower.match(/\b(\d+(?:\.\d+)?)\s*k\b/i);
+  const numMatch = lower.replace(/,/g, '').match(/\b(\d+(?:\.\d{1,2})?)\b/);
+  const amount = kMatch
+    ? Number((Number(kMatch[1]) * 1000).toFixed(2))
+    : numMatch
+    ? Number(Number(numMatch[1]).toFixed(2))
+    : 0;
+
+  const isIncome =
+    /\b(received|receive|earned|earn|salary|tankhwa|income|refund|credited|credit|bonus|freelance|mila|mili|aaya|aayi)\b/i.test(
+      lower
+    );
+  const type = isIncome ? 'income' : 'expense';
+  let paymentMethod: VoiceParsedTransaction['paymentMethod'] = 'UPI';
+  if (/\b(cash|nakad|nagad)\b/i.test(lower)) paymentMethod = 'Cash';
+  else if (/\b(bank|neft|imps|rtgs|transfer)\b/i.test(lower)) paymentMethod = 'Bank Transfer';
+  else if (/\b(credit\s*card)\b/i.test(lower)) paymentMethod = 'Credit Card';
+  else if (/\b(debit\s*card)\b/i.test(lower)) paymentMethod = 'Debit Card';
+
+  let category: VoiceParsedTransaction['category'] =
+    type === 'income' ? 'Other Income' : 'Other Expenses';
+  if (type === 'income') {
+    if (/\b(salary|tankhwa)\b/i.test(lower)) category = 'Salary';
+    else if (/\b(freelanc)\b/i.test(lower)) category = 'Freelancing';
+    else if (/\b(business)\b/i.test(lower)) category = 'Business Income';
+  } else {
+    if (/\b(food|lunch|dinner|breakfast|chai|tea|coffee|snack|khana|grocery|groceries)\b/i.test(lower)) {
+      category = 'Food';
+    } else if (/\b(auto|cab|uber|ola|metro|bus|petrol|fuel|transport)\b/i.test(lower)) {
+      category = 'Transport';
+    } else if (/\b(rent|kiraya)\b/i.test(lower)) {
+      category = 'Rent';
+    } else if (/\b(electric|bijli)\b/i.test(lower)) {
+      category = 'Electricity';
+    } else if (/\b(internet|wifi|recharge)\b/i.test(lower)) {
+      category = 'Internet';
+    } else if (/\b(doctor|medicine|medical|health)\b/i.test(lower)) {
+      category = 'Healthcare';
+    } else if (/\b(shop|shopping|amazon|flipkart)\b/i.test(lower)) {
+      category = 'Shopping';
+    }
+  }
+
+  return {
+    transcript: cleaned,
+    type,
+    amount: Number.isFinite(amount) && amount > 0 ? amount : 0,
+    title: type === 'income' ? `${category} Received` : `${category} Expense`,
+    category,
+    paymentMethod,
+    date: localDate,
+    time: localTime,
+    description: cleaned.slice(0, 200),
+    missingAmountReason:
+      amount > 0 ? '' : 'No monetary amount was detected. Please enter the amount below.',
+  };
+}
+
+export interface BackendSecuritySnapshot {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  isAdmin: boolean;
+  accountStatus: 'active' | 'deactivated';
+  restrictionStatus: 'active' | 'under_investigation' | 'temp_banned' | 'perm_banned';
+  banType: 'none' | 'temporary' | 'permanent';
+  banReason: string;
+  banDurationLabel: string;
+  banExpiresAtIso: string | null;
+  aiRestrictedUntilIso: string | null;
+  messagingRestrictedUntilIso: string | null;
+  vipStatus: 'none' | 'vip';
+  vipTier: VipTier;
+  billingCycle: BillingCycle;
+  subscriptionStatus: SubscriptionStatus;
+  subscriptionEndIso: string | null;
+  aiUsage?: AiUsageSummary;
+  warningCount: number;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+}
+
+export async function fetchBackendSecurityStatus(): Promise<BackendSecuritySnapshot | null> {
+  if (!auth.currentUser) return null;
+  const headers = await getAuthHeaders(false);
+  const res = await fetch('/api/security/status', { method: 'GET', headers });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  const data = (await res.json()) as { security?: BackendSecuritySnapshot };
+  return data.security || null;
+}
+
+export async function reportAuthSecurityEvent(params: {
+  eventType: 'failed_login' | 'signup_created' | 'unauthorized_account_access';
+  email?: string;
+  userId?: string;
+  errorCode?: string;
+}): Promise<void> {
+  try {
+    await fetch('/api/security/auth-event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+  } catch {
+    // Telemetry reporting must never break login/signup UX
+  }
+}
+
+export async function verifyBackendVipEntitlement(claimedVip = false): Promise<{
+  vipStatus: 'none' | 'vip';
+  vipTier: VipTier;
+  billingCycle: BillingCycle;
+  subscriptionStatus: SubscriptionStatus;
+  subscriptionEndIso: string | null;
+  aiUsage?: AiUsageSummary;
+  isVipActive: boolean;
+  restrictionStatus: string;
+  isAdmin: boolean;
+}> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch(
+    `/api/security/vip-check?claimedVip=${claimedVip ? 'true' : 'false'}`,
+    { method: 'GET', headers }
+  );
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return (await res.json()) as {
+    vipStatus: 'none' | 'vip';
+    vipTier: VipTier;
+    billingCycle: BillingCycle;
+    subscriptionStatus: SubscriptionStatus;
+    subscriptionEndIso: string | null;
+    aiUsage?: AiUsageSummary;
+    isVipActive: boolean;
+    restrictionStatus: string;
+    isAdmin: boolean;
+  };
+}
+
+export interface BackendVipStatusResponse {
+  ok: boolean;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  subscriptionStatus: SubscriptionStatus;
+  subscriptionEndIso: string | null;
+  aiUsage: AiUsageSummary;
+  verifiedAt: string;
+}
+
+export async function fetchVipStatus(): Promise<BackendVipStatusResponse> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch('/api/vip/status', { method: 'GET', headers });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return (await res.json()) as BackendVipStatusResponse;
+}
+
+export function buildUpiPaymentUri(params: {
+  amountInr: number;
+  tierName: string;
+  billingCycle: BillingCycle;
+  paymentReference: string;
+}): string {
+  const note = `FinTrack ${params.tierName} ${params.billingCycle}`;
+  const query = [
+    `pa=${encodeURIComponent(VIP_UPI_ID)}`,
+    `pn=${encodeURIComponent('FinTrack')}`,
+    `am=${encodeURIComponent(String(params.amountInr))}`,
+    `cu=INR`,
+    `tr=${encodeURIComponent(params.paymentReference)}`,
+    `tn=${encodeURIComponent(note)}`,
+  ].join('&');
+  return `upi://pay?${query}`;
+}
+
+export function generateVipPaymentReference(): string {
+  const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `FTPAY-${Date.now().toString(36).toUpperCase()}-${rand}`;
+}
+
+export async function subscribeVipPlan(params: {
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  submittedPriceInr: number;
+  paymentReference: string;
+  utrReference: string;
+  paymentMethodLabel?: string;
+  displayName?: string;
+}): Promise<{
+  ok: boolean;
+  pendingApproval: boolean;
+  status: 'pending';
+  requestId: string;
+  tier: VipTier;
+  billingCycle: BillingCycle;
+  amountInr: number;
+  upiId: string;
+  upiDeepLink: string;
+  paymentReference: string;
+  utrReference: string;
+  submittedAtIso: string;
+}> {
+  const headers = await getAuthHeaders(true);
+  const res = await fetch('/api/vip/subscribe', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return (await res.json()) as {
+    ok: boolean;
+    pendingApproval: boolean;
+    status: 'pending';
+    requestId: string;
+    tier: VipTier;
+    billingCycle: BillingCycle;
+    amountInr: number;
+    upiId: string;
+    upiDeepLink: string;
+    paymentReference: string;
+    utrReference: string;
+    submittedAtIso: string;
+  };
+}
+
+export async function cancelVipSubscription(): Promise<{
+  ok: boolean;
+  status: SubscriptionStatus;
+  autoRenew: boolean;
+  tier: VipTier;
+  periodEndIso: string;
+}> {
+  const headers = await getAuthHeaders(true);
+  const res = await fetch('/api/vip/cancel', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  return (await res.json()) as {
+    ok: boolean;
+    status: SubscriptionStatus;
+    autoRenew: boolean;
+    tier: VipTier;
+    periodEndIso: string;
+  };
+}
+
+export async function fetchAdminSecurityTelemetry(): Promise<SecurityEventRecord[]> {
+  const headers = await getAuthHeaders(false);
+  const res = await fetch('/api/admin/security-telemetry', { method: 'GET', headers });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  const data = (await res.json()) as { events?: SecurityEventRecord[] };
+  return Array.isArray(data.events) ? data.events : [];
 }

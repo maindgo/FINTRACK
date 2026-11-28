@@ -1,4 +1,15 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import {
+  consumeAiUsageQuota,
+  recordBackendSecurityEvent,
+  type SecurityGuardResult,
+} from './securityGuard';
+import {
+  BACKEND_VIP_TIERS,
+  isValidVipTier,
+  tierMeetsMinimum,
+  type VipTier,
+} from './vipConfig';
 
 export const GEMINI_MODEL = 'gemini-4-hydrogen';
 export const GEMINI_TRANSCRIBE_MODEL = 'gemini-3.5-transcribe';
@@ -348,129 +359,265 @@ function mapGeminiError(err: unknown): { status: number; code: string; message: 
   };
 }
 
-const INSIGHTS_RESPONSE_SCHEMA = {
+const INSIGHTS_SILVER_PROPERTIES = {
+  financial_summary: {
+    type: Type.OBJECT,
+    properties: {
+      overview: { type: Type.STRING },
+      monthly_income_inr: { type: Type.NUMBER },
+      monthly_expenses_inr: { type: Type.NUMBER },
+      total_savings_inr: { type: Type.NUMBER },
+      savings_rate_pct: { type: Type.NUMBER },
+      previous_month_comparison: { type: Type.STRING },
+      data_availability_note: { type: Type.STRING },
+    },
+    required: [
+      'overview',
+      'monthly_income_inr',
+      'monthly_expenses_inr',
+      'total_savings_inr',
+      'savings_rate_pct',
+      'previous_month_comparison',
+      'data_availability_note',
+    ],
+  },
+  spending_analysis: {
+    type: Type.OBJECT,
+    properties: {
+      narrative: { type: Type.STRING },
+      top_categories: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            category: { type: Type.STRING },
+            amount_inr: { type: Type.NUMBER },
+            share_pct: { type: Type.NUMBER },
+            previous_month_inr: { type: Type.NUMBER },
+            trend_note: { type: Type.STRING },
+          },
+          required: ['category', 'amount_inr', 'share_pct', 'previous_month_inr', 'trend_note'],
+        },
+      },
+    },
+    required: ['narrative', 'top_categories'],
+  },
+  unusual_spending: {
+    type: Type.OBJECT,
+    properties: {
+      summary: { type: Type.STRING },
+      alerts: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            category: { type: Type.STRING },
+            amount_inr: { type: Type.NUMBER },
+            reason: { type: Type.STRING },
+            severity: { type: Type.STRING },
+          },
+          required: ['category', 'amount_inr', 'reason', 'severity'],
+        },
+      },
+    },
+    required: ['summary', 'alerts'],
+  },
+  savings_suggestions: {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        action_step: { type: Type.STRING },
+        potential_monthly_saving_inr: { type: Type.NUMBER },
+        priority: { type: Type.STRING },
+      },
+      required: ['title', 'action_step', 'potential_monthly_saving_inr', 'priority'],
+    },
+  },
+  budget_recommendations: {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        category: { type: Type.STRING },
+        current_budget_inr: { type: Type.NUMBER },
+        recommended_budget_inr: { type: Type.NUMBER },
+        rationale: { type: Type.STRING },
+      },
+      required: ['category', 'current_budget_inr', 'recommended_budget_inr', 'rationale'],
+    },
+  },
+};
+
+const SAVINGS_PREDICTIONS_FIELD_SCHEMA = {
   type: Type.OBJECT,
   properties: {
-    financial_summary: {
-      type: Type.OBJECT,
-      properties: {
-        overview: { type: Type.STRING },
-        monthly_income_inr: { type: Type.NUMBER },
-        monthly_expenses_inr: { type: Type.NUMBER },
-        total_savings_inr: { type: Type.NUMBER },
-        savings_rate_pct: { type: Type.NUMBER },
-        previous_month_comparison: { type: Type.STRING },
-        data_availability_note: { type: Type.STRING },
-      },
-      required: [
-        'overview',
-        'monthly_income_inr',
-        'monthly_expenses_inr',
-        'total_savings_inr',
-        'savings_rate_pct',
-        'previous_month_comparison',
-        'data_availability_note',
-      ],
-    },
-    spending_analysis: {
-      type: Type.OBJECT,
-      properties: {
-        narrative: { type: Type.STRING },
-        top_categories: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              category: { type: Type.STRING },
-              amount_inr: { type: Type.NUMBER },
-              share_pct: { type: Type.NUMBER },
-              previous_month_inr: { type: Type.NUMBER },
-              trend_note: { type: Type.STRING },
-            },
-            required: ['category', 'amount_inr', 'share_pct', 'previous_month_inr', 'trend_note'],
-          },
-        },
-      },
-      required: ['narrative', 'top_categories'],
-    },
-    unusual_spending: {
-      type: Type.OBJECT,
-      properties: {
-        summary: { type: Type.STRING },
-        alerts: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              category: { type: Type.STRING },
-              amount_inr: { type: Type.NUMBER },
-              reason: { type: Type.STRING },
-              severity: { type: Type.STRING },
-            },
-            required: ['category', 'amount_inr', 'reason', 'severity'],
-          },
-        },
-      },
-      required: ['summary', 'alerts'],
-    },
-    savings_suggestions: {
+    summary: { type: Type.STRING },
+    disclaimer: { type: Type.STRING },
+    goals: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          title: { type: Type.STRING },
-          action_step: { type: Type.STRING },
-          potential_monthly_saving_inr: { type: Type.NUMBER },
-          priority: { type: Type.STRING },
+          goal_name: { type: Type.STRING },
+          target_amount_inr: { type: Type.NUMBER },
+          saved_amount_inr: { type: Type.NUMBER },
+          estimated_months_to_goal: { type: Type.NUMBER },
+          estimated_completion_label: { type: Type.STRING },
+          monthly_saving_needed_inr: { type: Type.NUMBER },
+          status_note: { type: Type.STRING },
         },
-        required: ['title', 'action_step', 'potential_monthly_saving_inr', 'priority'],
+        required: [
+          'goal_name',
+          'target_amount_inr',
+          'saved_amount_inr',
+          'estimated_months_to_goal',
+          'estimated_completion_label',
+          'monthly_saving_needed_inr',
+          'status_note',
+        ],
       },
     },
-    budget_recommendations: {
+  },
+  required: ['summary', 'disclaimer', 'goals'],
+};
+
+const HEALTH_SCORE_FIELD_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    score: { type: Type.NUMBER },
+    grade: { type: Type.STRING },
+    summary: { type: Type.STRING },
+    savings_rate_score: { type: Type.NUMBER },
+    budget_discipline_score: { type: Type.NUMBER },
+    expense_stability_score: { type: Type.NUMBER },
+    debt_commitment_score: { type: Type.NUMBER },
+    recommendations: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+  },
+  required: [
+    'score',
+    'grade',
+    'summary',
+    'savings_rate_score',
+    'budget_discipline_score',
+    'expense_stability_score',
+    'debt_commitment_score',
+    'recommendations',
+  ],
+};
+
+const DIAMOND_FORECAST_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    forecast_horizon_label: { type: Type.STRING },
+    executive_summary: { type: Type.STRING },
+    monthly_projections: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          month_label: { type: Type.STRING },
+          projected_income_inr: { type: Type.NUMBER },
+          projected_expenses_inr: { type: Type.NUMBER },
+          projected_savings_inr: { type: Type.NUMBER },
+          confidence_note: { type: Type.STRING },
+        },
+        required: [
+          'month_label',
+          'projected_income_inr',
+          'projected_expenses_inr',
+          'projected_savings_inr',
+          'confidence_note',
+        ],
+      },
+    },
+    future_expense_predictions: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
           category: { type: Type.STRING },
-          current_budget_inr: { type: Type.NUMBER },
-          recommended_budget_inr: { type: Type.NUMBER },
+          current_monthly_inr: { type: Type.NUMBER },
+          predicted_next_month_inr: { type: Type.NUMBER },
+          expected_change_pct: { type: Type.NUMBER },
+          driver_note: { type: Type.STRING },
+        },
+        required: [
+          'category',
+          'current_monthly_inr',
+          'predicted_next_month_inr',
+          'expected_change_pct',
+          'driver_note',
+        ],
+      },
+    },
+    personalized_financial_plan: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          phase: { type: Type.STRING },
+          action_title: { type: Type.STRING },
+          target_amount_inr: { type: Type.NUMBER },
           rationale: { type: Type.STRING },
         },
-        required: ['category', 'current_budget_inr', 'recommended_budget_inr', 'rationale'],
+        required: ['phase', 'action_title', 'target_amount_inr', 'rationale'],
       },
     },
-    savings_predictions: {
+    advanced_health_analysis: {
       type: Type.OBJECT,
       properties: {
-        summary: { type: Type.STRING },
-        disclaimer: { type: Type.STRING },
-        goals: {
+        emergency_runway_months: { type: Type.NUMBER },
+        resilience_rating: { type: Type.STRING },
+        risk_factors: {
           type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              goal_name: { type: Type.STRING },
-              target_amount_inr: { type: Type.NUMBER },
-              saved_amount_inr: { type: Type.NUMBER },
-              estimated_months_to_goal: { type: Type.NUMBER },
-              estimated_completion_label: { type: Type.STRING },
-              monthly_saving_needed_inr: { type: Type.NUMBER },
-              status_note: { type: Type.STRING },
-            },
-            required: [
-              'goal_name',
-              'target_amount_inr',
-              'saved_amount_inr',
-              'estimated_months_to_goal',
-              'estimated_completion_label',
-              'monthly_saving_needed_inr',
-              'status_note',
-            ],
-          },
+          items: { type: Type.STRING },
+        },
+        optimization_levers: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
         },
       },
-      required: ['summary', 'disclaimer', 'goals'],
+      required: [
+        'emergency_runway_months',
+        'resilience_rating',
+        'risk_factors',
+        'optimization_levers',
+      ],
     },
+  },
+  required: [
+    'forecast_horizon_label',
+    'executive_summary',
+    'monthly_projections',
+    'future_expense_predictions',
+    'personalized_financial_plan',
+    'advanced_health_analysis',
+  ],
+};
+
+const INSIGHTS_SILVER_SCHEMA = {
+  type: Type.OBJECT,
+  properties: INSIGHTS_SILVER_PROPERTIES,
+  required: [
+    'financial_summary',
+    'spending_analysis',
+    'unusual_spending',
+    'savings_suggestions',
+    'budget_recommendations',
+  ],
+};
+
+const INSIGHTS_GOLD_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    ...INSIGHTS_SILVER_PROPERTIES,
+    savings_predictions: SAVINGS_PREDICTIONS_FIELD_SCHEMA,
+    health_score: HEALTH_SCORE_FIELD_SCHEMA,
   },
   required: [
     'financial_summary',
@@ -479,6 +626,27 @@ const INSIGHTS_RESPONSE_SCHEMA = {
     'savings_suggestions',
     'budget_recommendations',
     'savings_predictions',
+    'health_score',
+  ],
+};
+
+const INSIGHTS_DIAMOND_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    ...INSIGHTS_SILVER_PROPERTIES,
+    savings_predictions: SAVINGS_PREDICTIONS_FIELD_SCHEMA,
+    health_score: HEALTH_SCORE_FIELD_SCHEMA,
+    diamond_forecast: DIAMOND_FORECAST_SCHEMA,
+  },
+  required: [
+    'financial_summary',
+    'spending_analysis',
+    'unusual_spending',
+    'savings_suggestions',
+    'budget_recommendations',
+    'savings_predictions',
+    'health_score',
+    'diamond_forecast',
   ],
 };
 
@@ -854,7 +1022,10 @@ export function handleHealth(): HandlerResult {
   };
 }
 
-export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult> {
+export async function handleAIInsights(
+  rawBody: unknown,
+  guard?: Extract<SecurityGuardResult, { allowed: true }>
+): Promise<HandlerResult> {
   const ai = getGeminiClient();
   if (!ai) {
     return {
@@ -869,7 +1040,68 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
 
   const body = (rawBody && typeof rawBody === 'object' ? rawBody : {}) as {
     snapshot?: unknown;
+    claimedTier?: unknown;
   };
+
+  const effectiveTier: VipTier = guard?.snapshot.vipTier ?? 'silver';
+  if (
+    guard &&
+    !guard.snapshot.isAdmin &&
+    isValidVipTier(body.claimedTier) &&
+    !tierMeetsMinimum(effectiveTier, body.claimedTier)
+  ) {
+    recordBackendSecurityEvent({
+      userId: guard.snapshot.uid,
+      userEmail: guard.snapshot.email,
+      category: 'vip_payment_security',
+      eventType: 'subscription_bypass_attempt',
+      riskLevel: 'high',
+      riskScore: 74,
+      summary: `Client requested ${body.claimedTier} AI Insights while active tier is ${effectiveTier}`,
+      evidence: `uid=${guard.snapshot.uid}, endpoint=/api/ai/insights`,
+    });
+    return {
+      status: 403,
+      body: {
+        error: `Access denied: your active membership is ${BACKEND_VIP_TIERS[effectiveTier].name}.`,
+        code: 'TIER_UPGRADE_REQUIRED',
+        currentTier: effectiveTier,
+        requiredTier: body.claimedTier,
+      },
+    };
+  }
+
+  if (guard && !guard.snapshot.isAdmin && !tierMeetsMinimum(effectiveTier, 'silver')) {
+    return {
+      status: 403,
+      body: {
+        error:
+          'AI Financial Insights are included starting with CLASS 3 (Silver VIP). Your Starter VIP tools remain fully active.',
+        code: 'TIER_UPGRADE_REQUIRED',
+        currentTier: effectiveTier,
+        requiredTier: 'silver',
+      },
+    };
+  }
+
+  if (
+    guard &&
+    !guard.snapshot.isAdmin &&
+    (guard.snapshot.aiUsage.insightsLimit <= 0 ||
+      guard.snapshot.aiUsage.insightsUsed >= guard.snapshot.aiUsage.insightsLimit)
+  ) {
+    return {
+      status: 429,
+      body: {
+        error: `Monthly AI Insights allowance (${guard.snapshot.aiUsage.insightsLimit}/month) reached for this period.`,
+        code: 'AI_QUOTA_EXCEEDED',
+        quotaType: 'insights',
+        currentTier: effectiveTier,
+        usage: guard.snapshot.aiUsage,
+      },
+    };
+  }
+
   const snapshot = sanitizeFinancialSnapshot(body.snapshot);
   if (!snapshot) {
     return {
@@ -888,6 +1120,31 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
     };
   }
 
+  const isDiamond = effectiveTier === 'diamond';
+  const isGoldOrAbove = tierMeetsMinimum(effectiveTier, 'gold');
+
+  const selectedSchema = isDiamond
+    ? INSIGHTS_DIAMOND_SCHEMA
+    : isGoldOrAbove
+    ? INSIGHTS_GOLD_SCHEMA
+    : INSIGHTS_SILVER_SCHEMA;
+
+  const tierInstructions = isDiamond
+    ? [
+        'TIER MODE: CLASS 5 DIAMOND VIP — Include ALL sections:',
+        '- Complete monthly summary, expense analysis, unusual spending alerts, spending/budget recommendations.',
+        '- Goal completion savings_predictions (estimates only, not guarantees).',
+        '- Financial Health Score (score 0-100, letter grade A+/A/B+/B/C/D, 4 sub-scores 0-100, actionable recommendations).',
+        '- Diamond Forecast (3-month monthly_projections based on recent trend/commitments, top 4-6 category future_expense_predictions, 3-step personalized_financial_plan, and advanced_health_analysis with emergency_runway_months, resilience_rating, risk_factors, optimization_levers).',
+      ]
+    : isGoldOrAbove
+    ? [
+        'TIER MODE: CLASS 4 GOLD VIP — Include monthly summary, expense analysis, unusual spending, savings & budget recommendations, goal savings_predictions (estimates only), and Financial Health Score (0-100 score, grade, 4 factor scores 0-100, recommendations).',
+      ]
+    : [
+        'TIER MODE: CLASS 3 SILVER VIP — Provide concise Basic AI Insights, monthly AI expense analysis narrative + top categories, unusual spending alerts, and practical AI spending & budget recommendations.',
+      ];
+
   try {
     const { response, modelUsed } = await generateWithModelFallback(ai, GEMINI_MODEL, {
       contents: `Analyze this sanitized personal finance snapshot and return structured JSON insights in Indian Rupees (₹):\n${JSON.stringify(
@@ -896,16 +1153,17 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
       config: {
         systemInstruction: [
           'You are FinTrack AI Financial Analyst, a concise, accurate, personal finance analyst.',
+          ...tierInstructions,
           'STRICT RULES:',
           '1. Base every number and statement strictly on the provided JSON snapshot. Never fabricate transactions, balances, or categories.',
           '2. Express ALL currency amounts in Indian Rupees (₹).',
           '3. Keep overview and narratives concise (2-3 sentences max), practical, and grounded in actual figures.',
           '4. If previous month data, budgets, or savings goals are missing/empty, state clearly that those specific comparisons or goal timelines cannot be generated until data is added (and return empty arrays where appropriate).',
-          '5. Clearly label savings_predictions as estimates based on historical cash flow, NOT guarantees. Never recommend specific stocks, mutual funds, crypto, or promise investment returns.',
+          '5. Clearly label projections and predictions as estimates based on historical cash flow, NOT guarantees. Never recommend specific stocks, mutual funds, crypto, or promise investment returns.',
           '6. For severity use one of: "info", "warning", "critical". For priority use one of: "high", "medium", "low".',
         ].join('\n'),
         responseMimeType: 'application/json',
-        responseSchema: INSIGHTS_RESPONSE_SCHEMA,
+        responseSchema: selectedSchema,
       },
     });
 
@@ -925,9 +1183,13 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
       .replace(/\s*```$/i, '')
       .trim();
 
-    let parsed: unknown;
+    let parsedObj: Record<string, unknown>;
     try {
-      parsed = JSON.parse(cleanedJson);
+      const parsed = JSON.parse(cleanedJson);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('Expected JSON object');
+      }
+      parsedObj = parsed as Record<string, unknown>;
     } catch {
       return {
         status: 502,
@@ -938,12 +1200,30 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
       };
     }
 
+    if (!isGoldOrAbove) {
+      parsedObj.savings_predictions = {
+        summary:
+          'Upgrade to CLASS 4 Gold VIP or CLASS 5 Diamond VIP to unlock goal timeline predictions and your Financial Health Score.',
+        disclaimer:
+          'Goal predictions and health scores are available in Gold VIP and Diamond VIP plans.',
+        goals: [],
+      };
+      parsedObj.health_score = null;
+    }
+    if (!isDiamond) {
+      parsedObj.diamond_forecast = null;
+    }
+
+    const updatedUsage = guard ? await consumeAiUsageQuota(guard, 'insights') : undefined;
+
     return {
       status: 200,
       body: {
         model: modelUsed,
         generatedAt: new Date().toISOString(),
-        insights: parsed,
+        tier: effectiveTier,
+        usage: updatedUsage,
+        insights: parsedObj,
       },
     };
   } catch (err: unknown) {
@@ -955,7 +1235,10 @@ export async function handleAIInsights(rawBody: unknown): Promise<HandlerResult>
   }
 }
 
-export async function handleAIChat(rawBody: unknown): Promise<HandlerResult> {
+export async function handleAIChat(
+  rawBody: unknown,
+  guard?: Extract<SecurityGuardResult, { allowed: true }>
+): Promise<HandlerResult> {
   const ai = getGeminiClient();
   if (!ai) {
     return {
@@ -972,7 +1255,44 @@ export async function handleAIChat(rawBody: unknown): Promise<HandlerResult> {
     question?: unknown;
     history?: unknown;
     snapshot?: unknown;
+    claimedTier?: unknown;
   };
+
+  const effectiveTier: VipTier = guard?.snapshot.vipTier ?? 'gold';
+  if (
+    guard &&
+    !guard.snapshot.isAdmin &&
+    !tierMeetsMinimum(effectiveTier, 'gold')
+  ) {
+    return {
+      status: 403,
+      body: {
+        error:
+          'Conversational AI Financial Advisor is unlocked in CLASS 4 (Gold VIP) and CLASS 5 (Diamond VIP).',
+        code: 'TIER_UPGRADE_REQUIRED',
+        currentTier: effectiveTier,
+        requiredTier: 'gold',
+      },
+    };
+  }
+
+  if (
+    guard &&
+    !guard.snapshot.isAdmin &&
+    (guard.snapshot.aiUsage.advisorLimit <= 0 ||
+      guard.snapshot.aiUsage.advisorUsed >= guard.snapshot.aiUsage.advisorLimit)
+  ) {
+    return {
+      status: 429,
+      body: {
+        error: `Monthly AI Advisor message allowance (${guard.snapshot.aiUsage.advisorLimit}/month) reached for this period.`,
+        code: 'AI_QUOTA_EXCEEDED',
+        quotaType: 'advisor',
+        currentTier: effectiveTier,
+        usage: guard.snapshot.aiUsage,
+      },
+    };
+  }
 
   const question = sanitizeText(body.question, 600);
   if (!question) {
@@ -1003,6 +1323,11 @@ export async function handleAIChat(rawBody: unknown): Promise<HandlerResult> {
         .join('\n')
     : '';
 
+  const advisorRoleInstruction =
+    effectiveTier === 'diamond'
+      ? 'You are FinTrack Diamond VIP AI Financial Planner & Advisor. Provide multi-month cash-flow foresight, future expense risk analysis, and personalized financial planning steps strictly grounded in the snapshot.'
+      : 'You are FinTrack Gold VIP AI Financial Advisor. Focus on savings recommendations, budget optimization, and Financial Health Score improvement grounded in the snapshot.';
+
   try {
     const prompt = [
       `Sanitized Financial Snapshot (Amounts in INR ₹):`,
@@ -1017,7 +1342,7 @@ export async function handleAIChat(rawBody: unknown): Promise<HandlerResult> {
       contents: prompt,
       config: {
         systemInstruction: [
-          'You are FinTrack AI Chat Assistant.',
+          advisorRoleInstruction,
           'Answer the user question accurately using ONLY the provided Sanitized Financial Snapshot.',
           'All currency amounts must be formatted in Indian Rupees (₹).',
           'If a requested figure or category is missing from the snapshot, clearly say that no records were found for it rather than guessing.',
@@ -1039,12 +1364,149 @@ export async function handleAIChat(rawBody: unknown): Promise<HandlerResult> {
       };
     }
 
+    const updatedUsage = guard ? await consumeAiUsageQuota(guard, 'advisor') : undefined;
+
     return {
       status: 200,
       body: {
         model: modelUsed,
         answer,
         answeredAt: new Date().toISOString(),
+        tier: effectiveTier,
+        usage: updatedUsage,
+      },
+    };
+  } catch (err: unknown) {
+    const mapped = mapGeminiError(err);
+    return {
+      status: mapped.status,
+      body: { error: mapped.message, code: mapped.code },
+    };
+  }
+}
+
+export async function handleDiamondForecast(
+  rawBody: unknown,
+  guard?: Extract<SecurityGuardResult, { allowed: true }>
+): Promise<HandlerResult> {
+  const ai = getGeminiClient();
+  if (!ai) {
+    return {
+      status: 503,
+      body: {
+        error:
+          'GEMINI_API_KEY is not configured yet. Add GEMINI_API_KEY in your environment variables to enable Diamond AI Forecasting.',
+        code: 'MISSING_API_KEY',
+      },
+    };
+  }
+
+  const effectiveTier: VipTier = guard?.snapshot.vipTier ?? 'diamond';
+  if (guard && !guard.snapshot.isAdmin && !tierMeetsMinimum(effectiveTier, 'diamond')) {
+    return {
+      status: 403,
+      body: {
+        error:
+          'Advanced AI Financial Forecasting & Personalized Planning require CLASS 5 (Diamond VIP).',
+        code: 'TIER_UPGRADE_REQUIRED',
+        currentTier: effectiveTier,
+        requiredTier: 'diamond',
+      },
+    };
+  }
+
+  if (
+    guard &&
+    !guard.snapshot.isAdmin &&
+    (guard.snapshot.aiUsage.insightsLimit <= 0 ||
+      guard.snapshot.aiUsage.insightsUsed >= guard.snapshot.aiUsage.insightsLimit)
+  ) {
+    return {
+      status: 429,
+      body: {
+        error: `Monthly AI Insights allowance (${guard.snapshot.aiUsage.insightsLimit}/month) reached for this period.`,
+        code: 'AI_QUOTA_EXCEEDED',
+        quotaType: 'forecast',
+        currentTier: effectiveTier,
+        usage: guard.snapshot.aiUsage,
+      },
+    };
+  }
+
+  const body = (rawBody && typeof rawBody === 'object' ? rawBody : {}) as {
+    snapshot?: unknown;
+  };
+  const snapshot = sanitizeFinancialSnapshot(body.snapshot);
+  if (!snapshot) {
+    return {
+      status: 400,
+      body: { error: 'Invalid financial snapshot payload.', code: 'BAD_REQUEST' },
+    };
+  }
+
+  if (snapshot.transactionCount === 0) {
+    return {
+      status: 400,
+      body: {
+        error: 'At least one transaction is required to generate Diamond AI financial forecasting.',
+        code: 'INSUFFICIENT_DATA',
+      },
+    };
+  }
+
+  try {
+    const { response, modelUsed } = await generateWithModelFallback(ai, GEMINI_MODEL, {
+      contents: `Generate an Advanced Diamond VIP AI Financial Forecast, Future Expense Prediction, Personalized Financial Plan, and Advanced Health Analysis in Indian Rupees (₹) from this snapshot:\n${JSON.stringify(
+        snapshot
+      )}`,
+      config: {
+        systemInstruction: [
+          'You are FinTrack Diamond VIP Financial Forecasting Engine.',
+          'Produce strictly grounded, non-speculative estimates in INR (₹) based on recorded historical cash flows, budgets, and commitments.',
+          '1. monthly_projections: 3 upcoming months of projected_income_inr, projected_expenses_inr, projected_savings_inr with brief confidence_note.',
+          '2. future_expense_predictions: top 4 to 6 categories from categoryBreakdown showing expected next month spend and change %.',
+          '3. personalized_financial_plan: 3 structured actionable phases (e.g., Immediate 30 Days, Quarter Horizon, Long-Term Reserve) with INR targets.',
+          '4. advanced_health_analysis: realistic emergency_runway_months, resilience_rating (e.g., "Strong", "Moderate", "Needs Buffer"), concise risk_factors, and optimization_levers.',
+          'Never recommend specific stocks, mutual funds, or crypto.',
+        ].join('\n'),
+        responseMimeType: 'application/json',
+        responseSchema: DIAMOND_FORECAST_SCHEMA,
+      },
+    });
+
+    const rawText = (response.text || '').trim();
+    if (!rawText) {
+      return {
+        status: 502,
+        body: { error: 'Gemini returned an empty forecast response.', code: 'EMPTY_RESPONSE' },
+      };
+    }
+
+    const cleanedJson = rawText
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleanedJson);
+    } catch {
+      return {
+        status: 502,
+        body: { error: 'Could not parse Diamond forecast JSON cleanly.', code: 'INVALID_JSON_RESPONSE' },
+      };
+    }
+
+    const updatedUsage = guard ? await consumeAiUsageQuota(guard, 'forecast') : undefined;
+
+    return {
+      status: 200,
+      body: {
+        model: modelUsed,
+        generatedAt: new Date().toISOString(),
+        tier: effectiveTier,
+        usage: updatedUsage,
+        diamond_forecast: parsed,
       },
     };
   } catch (err: unknown) {
